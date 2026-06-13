@@ -1,0 +1,10 @@
+{
+  "name": "@traderzview/bench",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "traderzview benchmark & backend-conformance workspace — never published.",
+  "scripts": {
+    "micro": "node micro/placeholder.mjs"
+  }
+}

@@ -1,0 +1,8 @@
+packages:
+  - 'bench'
+
+# esbuild installs its prebuilt platform binary via a postinstall build script.
+# Approve just esbuild so pnpm runs it; every other dependency's build scripts
+# stay blocked by default (supply-chain hygiene — pnpm 10+ behaviour).
+allowBuilds:
+  esbuild: true

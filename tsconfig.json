@@ -1,0 +1,17 @@
+{
+  "$comment": "Editor/solution root. Mirrors tsconfig.verify.json so IDEs load the full eleven-project graph. CI enforces via tsconfig.verify.json.",
+  "files": [],
+  "references": [
+    { "path": "./src/core/tsconfig.composite.json" },
+    { "path": "./src/fmt/tsconfig.composite.json" },
+    { "path": "./src/gfx/tsconfig.composite.json" },
+    { "path": "./src/data/tsconfig.composite.json" },
+    { "path": "./src/model/tsconfig.composite.json" },
+    { "path": "./src/views/tsconfig.composite.json" },
+    { "path": "./src/backend-canvas/tsconfig.composite.json" },
+    { "path": "./src/host/tsconfig.composite.json" },
+    { "path": "./src/api/tsconfig.composite.json" },
+    { "path": "./src/extras/tsconfig.composite.json" },
+    { "path": "./tsconfig.entries.json" }
+  ]
+}

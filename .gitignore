@@ -8,6 +8,7 @@ node_modules/
 dist/
 build/
 out/
+.tsbuild/
 *.tsbuildinfo
 
 # Test & coverage

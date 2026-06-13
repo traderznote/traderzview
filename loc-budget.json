@@ -1,0 +1,17 @@
+{
+  "$comment": "Hard CI LOC limits per module — dev-docs/design/01-architecture.md §11. Counted like the reference baseline: all .ts incl. comments & blanks, *.test.ts / *.spec.ts excluded. `total` is the derived sum of the budgets (asserted by scripts/loc-budget.mjs); never hand-edit it as a gate. Editing any per-module number requires a rationale line in the same PR (§11 speed bump).",
+  "budgets": {
+    "core": 600,
+    "fmt": 250,
+    "gfx": 900,
+    "data": 1500,
+    "model": 4800,
+    "views": 2500,
+    "backend-canvas": 1300,
+    "host": 2000,
+    "api": 2200,
+    "extras": 1800,
+    "entries": 100
+  },
+  "total": 17950
+}

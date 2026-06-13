@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "rootDir": "src",
+    "outDir": ".tsbuild/entries",
+    "tsBuildInfoFile": ".tsbuild/entries.tsbuildinfo"
+  },
+  "include": ["src/index.ts"],
+  "references": [
+    { "path": "./src/api/tsconfig.composite.json" },
+    { "path": "./src/extras/tsconfig.composite.json" }
+  ]
+}

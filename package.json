@@ -1,0 +1,38 @@
+{
+  "name": "traderzview",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A brand-new, MIT-licensed, open-source financial charting library — built from scratch in TypeScript.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./gfx": "./dist/gfx.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "verify": "tsc -b tsconfig.verify.json && depcruise --config .dependency-cruiser.cjs src",
+    "loc": "node scripts/loc-budget.mjs",
+    "build": "node scripts/build.mjs",
+    "size": "pnpm run build && size-limit",
+    "test": "vitest run --passWithNoTests",
+    "bench": "node scripts/bench.mjs",
+    "conformance": "node scripts/conformance.mjs",
+    "demo:bootstrap": "node scripts/verify-bootstrap.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@size-limit/file": "^11.1.0",
+    "dependency-cruiser": "^16.0.0",
+    "esbuild": "^0.24.0",
+    "size-limit": "^11.1.0",
+    "tinybench": "^3.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "rootDir": ".",
+    "outDir": "../../.tsbuild/backend-canvas",
+    "tsBuildInfoFile": "../../.tsbuild/backend-canvas.tsbuildinfo"
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["**/*.test.ts", "**/*.spec.ts"],
+  "references": [
+    { "path": "../core/tsconfig.composite.json" },
+    { "path": "../gfx/tsconfig.composite.json" }
+  ]
+}

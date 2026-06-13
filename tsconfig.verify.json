@@ -1,0 +1,17 @@
+{
+  "$comment": "Solution config that runs the layer wall: `tsc -b tsconfig.verify.json` builds every module as an isolated composite project. An import outside a module's `references` set (architecture §3.1) fails the build. Referenced from the `verify` npm script.",
+  "files": [],
+  "references": [
+    { "path": "./src/core/tsconfig.composite.json" },
+    { "path": "./src/fmt/tsconfig.composite.json" },
+    { "path": "./src/gfx/tsconfig.composite.json" },
+    { "path": "./src/data/tsconfig.composite.json" },
+    { "path": "./src/model/tsconfig.composite.json" },
+    { "path": "./src/views/tsconfig.composite.json" },
+    { "path": "./src/backend-canvas/tsconfig.composite.json" },
+    { "path": "./src/host/tsconfig.composite.json" },
+    { "path": "./src/api/tsconfig.composite.json" },
+    { "path": "./src/extras/tsconfig.composite.json" },
+    { "path": "./tsconfig.entries.json" }
+  ]
+}
