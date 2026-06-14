@@ -16,4 +16,8 @@ declare global {
   // Host globals present on every target (browser, Node, workers) but absent from
   // lib.es2022 — declared here so headless modules can use them without lib.dom.
   function queueMicrotask(callback: () => void): void;
+
+  // Minimal console surface: only the methods headless modules legitimately use
+  // (the `validation: 'warn'` diagnostic, design 02 §15). Not lib.dom's full type.
+  const console: { warn(...data: unknown[]): void };
 }

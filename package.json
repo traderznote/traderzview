@@ -26,6 +26,7 @@
     "demo:bootstrap": "node scripts/verify-bootstrap.mjs",
     "demo:core": "node scripts/demo-core.mjs",
     "demo:fmt": "node scripts/demo-fmt.mjs",
+    "demo:data": "node scripts/demo-data.mjs",
     "demo:gfx": "node scripts/demo-gfx.mjs"
   },
   "devDependencies": {
