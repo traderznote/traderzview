@@ -24,7 +24,8 @@
     "bench": "node scripts/bench.mjs",
     "conformance": "node scripts/conformance.mjs",
     "demo:bootstrap": "node scripts/verify-bootstrap.mjs",
-    "demo:core": "node scripts/demo-core.mjs"
+    "demo:core": "node scripts/demo-core.mjs",
+    "demo:fmt": "node scripts/demo-fmt.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
