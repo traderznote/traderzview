@@ -1,0 +1,42 @@
+=== Overlay frame (design 03 §6: overlay layer only) ===
+  pane.beginFrame overlay
+  pane.renderLayer overlay (lists=1)
+  pane.endFrame
+
+=== One-frame coalescing (perf §4.4: N invalidations → 1 tick) ===
+  driver.applyRender
+  pane.beginFrame full
+  pane.renderLayer base (lists=1)
+  pane.renderLayer overlay (lists=1)
+  pane.endFrame
+
+=== Synchronous resize repaint (study 05 §3.8: inline, no rAF) ===
+  driver.syncWidgets
+  driver.computeLayout
+  driver.applySizes
+  driver.applyRender
+  pane.beginFrame full
+  pane.renderLayer base (lists=1)
+  pane.renderLayer overlay (lists=1)
+  pane.endFrame
+
+=== flushSync cancels a pending rAF (no double paint) ===
+  driver.syncWidgets
+  driver.computeLayout
+  driver.applySizes
+  driver.applyRender
+  pane.beginFrame full
+  pane.renderLayer base (lists=1)
+  pane.renderLayer overlay (lists=1)
+  pane.endFrame
+
+=== Drag gesture → router → default pan/clearHover intents ===
+  clearHover
+  pan 20
+  pan -5
+
+=== Wheel (PIXEL deltaY=−100) → normalize → router zoom intent ===
+  normalizeWheel(deltaY=-100) → scroll=0 zoom=1
+  zoom 1 @250
+
+demo-host OK: §6 call sequence per level, one-frame coalescing, inline sync resize, drag→pan + wheel→zoom intents.

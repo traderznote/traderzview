@@ -29,7 +29,8 @@
     "demo:data": "node scripts/demo-data.mjs",
     "demo:gfx": "node scripts/demo-gfx.mjs",
     "demo:model": "node scripts/demo-model.mjs",
-    "demo:views": "node scripts/demo-views.mjs"
+    "demo:views": "node scripts/demo-views.mjs",
+    "demo:host": "node scripts/demo-host.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
