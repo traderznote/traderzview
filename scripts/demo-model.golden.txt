@@ -1,0 +1,44 @@
+model: panes=1, defaultPriceScaleId=right
+data: slotCount=5 baseIndex=4 rows=5
+
+STEP 1 fitContent
+  command: fitContent
+  queue after reduce: [fitContent]
+  mask: level=Render autoscalePanes=0 horzCommands=1
+  HorzGeometry: barSpacing=120 rightOffset=0 x(base)=539 logical(0)=-0.4917
+
+STEP 2 setBarSpacing(12)
+  command: setBarSpacing
+  queue after reduce: [fitContent, setBarSpacing]
+  mask: level=Render autoscalePanes=0 horzCommands=1
+  HorzGeometry: barSpacing=12 rightOffset=0 x(base)=593 logical(0)=-45.4167
+
+kinetic: tuning.epsilon=0.0833 (= 1px / barSpacing)
+  positionAt(1000)=0 positionAt(1050)=23.2128 finished(1000)=false
+
+STEP 3 kinetic fling (animate)
+  command: animate
+  queue after reduce: [fitContent, setBarSpacing, animate]
+  mask: level=Render autoscalePanes=0 horzCommands=1
+  HorzGeometry: barSpacing=12 rightOffset=166.3332 x(base)=-1402.9985 logical(0)=120.9165
+
+STEP 3b stopAnimation
+  command: stopAnimation
+  queue after reduce: [fitContent, setBarSpacing, stopAnimation]
+  mask: level=Render autoscalePanes=0 horzCommands=1
+  HorzGeometry: barSpacing=12 rightOffset=166.3332 x(base)=-1402.9985 logical(0)=120.9165
+
+STEP 4 manual price drag (scroll 30px, autoScale off)
+  scroll blocked while autoScale ON: true
+  range before: min=9 max=17
+  range after:  min=9.6015 max=17.6015
+  mask: level=Render autoscalePanes=1
+
+STEP 5 percent-mode switch
+  scale.mode=2 (Percentage forces autoScale=true)
+  PriceConverter: mode=percent firstValue=10 toLogical(20)=20 y(20)=-3.6476
+
+mask invariant proof (None never carries work):
+  applyOptions(no-op) emits 0 masks
+  applyOptions(crosshair.mode=normal) → level=Overlay
+  applyOptions(width=800) → level=Layout

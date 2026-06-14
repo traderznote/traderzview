@@ -6,6 +6,7 @@
     "outDir": "../../.tsbuild/model",
     "tsBuildInfoFile": "../../.tsbuild/model.tsbuildinfo"
   },
+  "files": ["../globals.d.ts"],
   "include": ["**/*.ts"],
   "exclude": ["**/*.test.ts", "**/*.spec.ts"],
   "references": [
