@@ -1,0 +1,12 @@
+mergeOptions (null resets color to default; grid.width patched):
+  base    = {"color":"red","grid":{"visible":true,"width":2}}
+  patch   = {"color":null,"grid":{"width":4}}
+  default = {"color":"black","grid":{"visible":true,"width":1}}
+  result  = {"color":"black","grid":{"visible":true,"width":4}}
+
+bounds over arr = [10,20,20,30]:
+  v=5: lowerBound=0 upperBound=0
+  v=20: lowerBound=1 upperBound=3
+  v=25: lowerBound=3 upperBound=3
+  v=30: lowerBound=3 upperBound=4
+  v=40: lowerBound=4 upperBound=4

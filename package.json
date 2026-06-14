@@ -23,7 +23,8 @@
     "test": "vitest run --passWithNoTests",
     "bench": "node scripts/bench.mjs",
     "conformance": "node scripts/conformance.mjs",
-    "demo:bootstrap": "node scripts/verify-bootstrap.mjs"
+    "demo:bootstrap": "node scripts/verify-bootstrap.mjs",
+    "demo:core": "node scripts/demo-core.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",
