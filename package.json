@@ -25,7 +25,8 @@
     "conformance": "node scripts/conformance.mjs",
     "demo:bootstrap": "node scripts/verify-bootstrap.mjs",
     "demo:core": "node scripts/demo-core.mjs",
-    "demo:fmt": "node scripts/demo-fmt.mjs"
+    "demo:fmt": "node scripts/demo-fmt.mjs",
+    "demo:gfx": "node scripts/demo-gfx.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",

@@ -6,6 +6,7 @@
     "outDir": "../../.tsbuild/gfx",
     "tsBuildInfoFile": "../../.tsbuild/gfx.tsbuildinfo"
   },
+  "files": ["../globals.d.ts"],
   "include": ["**/*.ts"],
   "exclude": ["**/*.test.ts", "**/*.spec.ts"],
   "references": [

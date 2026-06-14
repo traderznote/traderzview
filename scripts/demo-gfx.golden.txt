@@ -1,0 +1,11 @@
+F0 display list:
+  list space=bitmap commands=2
+    rects coords=[0,0,4,10,6,2,4,8,12,1,4,9] runs=[{"count":2,"fill":"#26a69a"},{"count":1,"fill":"#ef5350"}]
+    polyline style=2 width=1 points=[0,5,8,3,16,6] runs=[{"count":3,"fill":"#2196f3"}]
+  list space=media commands=1
+    text items=1 first="O"
+
+crisp table:
+  crispWidth(1,2)=2  crispStrokePos(10,1,1)=10.5
+  tickRect(10,2,5)={"pos":19,"thickness":2,"length":5}
+  optimalBarWidth(10,1)=3  optimalCandlestickWidth(5,1)=4
