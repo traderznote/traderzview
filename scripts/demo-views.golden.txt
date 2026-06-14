@@ -1,0 +1,41 @@
+=== composite BASE layer (bands 0–5: grid + series) ===
+  lists=9
+  [0] bitmap: polyline×12, polyline×9
+  [1] bitmap: polyline×5
+  [2] media: area×5
+  [3] bitmap: polyline×5
+  [4] media: area×5
+  [5] bitmap: polyline×5
+  [6] bitmap: rects×5
+  [7] bitmap: rects×15
+  [8] bitmap: rects×10, rects×20, rects×4
+
+=== composite OVERLAY layer (bands 6–8: crosshair) ===
+  lists=1
+  [0] bitmap: polyline×2
+
+flat stream: lists=10 (media=2 bitmap=8)
+  commands=13 vertex/quad/text-sum=102
+
+=== hitTest @ media (74, 189) — per-kind engine hitTest ===
+  line        hit  dist=0 prio=1
+  area        hit  dist=0 prio=1
+  baseline    hit  dist=0 prio=1
+  histogram   hit  dist=0 prio=0
+  bar         hit  dist=1 prio=0
+  candlestick hit  dist=1 prio=0
+
+=== hitTestPane ranked (winner first) ===
+  hits=6 winner=histogram
+    histogram   dist=0 prio=0
+    baseline    dist=0 prio=1
+    area        dist=0 prio=1
+    line        dist=0 prio=1
+    candlestick dist=1 prio=0
+    bar         dist=1 prio=0
+
+=== axis layout (measurer: width=6·len, ascent 8 / descent 2; font 12px) ===
+  price axis: maxLabelWidth=30 width=52 labels=0
+  time  axis: height=28 labels=4 boldCount=4
+
+demo-views OK: 6 kinds + grid + crosshair composited both layers; 13 commands, hit winner histogram.

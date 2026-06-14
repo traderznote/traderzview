@@ -1,17 +1,18 @@
 {
   "$comment": "Hard CI LOC limits per module — dev-docs/design/01-architecture.md §11. Counted like the reference baseline: all .ts incl. comments & blanks, *.test.ts / *.spec.ts excluded. `total` is the derived sum of the budgets (asserted by scripts/loc-budget.mjs); never hand-edit it as a gate. Editing any per-module number requires a rationale line in the same PR (§11 speed bump).",
+  "$rationale_views": "2026-06-14 (M7): views raised 2500→4000 (§11 speed-bump). The architecture §11 estimate of 2500 predated implementation and is infeasible for the realized M7 scope — six series renderers coded verbatim from study-06 §4.5–§4.11 (incl. candlestick 3-pass §4.10 + histogram column-geometry cache §4.11), shared line-base/bar-base, the PaneScene registry, the SeriesKind engine + decimate helper, four scene-source services (grid/crosshair/price-line/last-value-label), the ranked hit-test service, and axis-layout. Realized ≈3834 LOC; code-only (comments+blanks stripped) ≈2600 already exceeds 2500, so no comment-trimming can fit it without violating the spec-of-record citation discipline. ≈4000 reflects the natural size; M11 (parity hardening, which spans views) may warrant a further documented bump. Total recomputed 17950→19450.",
   "budgets": {
     "core": 600,
     "fmt": 250,
     "gfx": 900,
     "data": 1500,
     "model": 4800,
-    "views": 2500,
+    "views": 4000,
     "backend-canvas": 1300,
     "host": 2000,
     "api": 2200,
     "extras": 1800,
     "entries": 100
   },
-  "total": 17950
+  "total": 19450
 }
