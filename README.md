@@ -9,52 +9,80 @@ purpose, under the MIT license.
 
 ## Status
 
-**Pre-implementation.** The complete design is finished and verified; no library code is written yet.
-The entire build plan lives in [`dev-docs/`](./dev-docs/) and is detailed enough to implement the
-library without any external reference.
+**v1.0.0 — feature-complete.** All v1 functionality is implemented, tested, and gated: the six series
+types, time & price scales, multi-pane layouts, the crosshair, price lines, full pointer/touch
+interaction, the four first-party plugins, drawing tools, indicators, multi-chart sync, and
+screenshots. The library is renderer-agnostic with a Canvas 2D backend shipping in v1.
 
-## Goals
+> Quality gates run on every change: strict TypeScript project-reference + dependency-cruiser import
+> walls, per-module LOC budgets, brotli byte budgets per entry point, **1300+** unit tests, a headless
+> end-to-end chart demo, profiling-symbols-are-free byte-identity, structural-invariant counters, and
+> exact micro-benchmark goldens.
 
-- **Feature parity** with today's best lightweight charting libraries in v1 (all common series types,
-  time & price scales, panes, plugins/primitives, full mouse/touch interaction).
-- **Renderer-agnostic core.** Views emit draw commands through a backend interface. A Canvas 2D
-  backend ships in v1; a GPU (WebGL/WebGPU) backend can be added later as a new backend only — no
-  rewrite.
-- **Cleaner, smaller, faster** — better architecture, fewer lines of code, and explicit performance
-  budgets.
-- **Designed-in extension seams** for drawing tools, indicators, and multi-chart layouts, so
-  TradingView-app-level features arrive later as additions, not rework.
+## Install
 
-## Documentation
-
-Start at **[`dev-docs/00-overview.md`](./dev-docs/00-overview.md)** — the front door, with the full
-reading order.
-
-```text
-dev-docs/
-├── 00-overview.md     — mission, locked decisions, reading order, ground rules
-├── design-spec.md     — the founding Phase 0 design spec
-├── study/             — how the prior art works (10 verified reference docs)
-└── design/            — what traderzview is (6 design docs)
-    ├── 01-architecture.md            — binding architecture (read first)
-    ├── 02-public-api-spec.md
-    ├── 03-rendering-backend-spec.md
-    ├── 04-performance-strategy.md
-    ├── 05-extensibility-roadmap.md
-    └── 06-implementation-roadmap.md  — milestone-by-milestone build order (start building here)
+```sh
+npm install traderzview
 ```
 
-**Ground rules:** the `study/` docs are *facts* (how the prior art behaves), the `design/` docs are
-*decisions* (what we build), and `design/06-implementation-roadmap.md` is *orders* (the build
-sequence). No source code from any studied library appears in these docs — concepts, math, and
-original interface sketches only.
+## Quickstart
 
-## Building it
+```ts
+import { createChart, CandlestickSeries } from 'traderzview';
 
-Implementation begins at **milestone 0 (repo bootstrap)** in
-[`dev-docs/design/06-implementation-roadmap.md`](./dev-docs/design/06-implementation-roadmap.md),
-which specifies the tooling, build, test harness, and performance gates, then proceeds milestone by
-milestone to a v1 release.
+const chart = createChart(document.getElementById('container')!, {
+  layout: { textColor: '#191919' },
+});
+
+const candles = chart.addSeries(CandlestickSeries, { upColor: '#26a69a', downColor: '#ef5350' });
+candles.setData([
+  { time: '2026-01-05', open: 10, high: 14, low: 9,  close: 13 },
+  { time: '2026-01-06', open: 13, high: 17, low: 12, close: 11 },
+  { time: '2026-01-07', open: 11, high: 12, low: 8,  close: 9  },
+]);
+
+chart.subscribeCrosshairMove((param) => {
+  const bar = param.seriesData.get(candles);
+  // param.time, bar, param.paneIndex …
+});
+
+chart.timeScale().fitContent();
+```
+
+## Features (v1)
+
+- **Six series types** — Line, Area, Baseline, Histogram, Bar, Candlestick.
+- **Scales** — a horizontal time scale and price scales in normal / logarithmic / percentage /
+  indexed-to-100 modes, multi-pane stacking, a grid, both left/right axes.
+- **Crosshair** — normal / magnet / magnet-to-OHLC / hidden, with last-value and price-line axis labels.
+- **Interaction** — pan, wheel zoom, kinetic fling, axis drag-scale, double-click reset, touch
+  gestures, eased scroll/fit animations.
+- **Screenshots** — `takeScreenshot()` / `toCanvas()` / `toBlob()`, with optional crosshair.
+- **Plugins & extensibility** (`traderzview/extras`) — series & up/down markers, text & image
+  watermarks, a drawing-tool host, an EMA indicator, and an N-chart sync group.
+- **Renderer-agnostic** — views emit plain-data draw commands through a backend interface; a Canvas 2D
+  backend ships in v1, and a GPU (WebGL/WebGPU) backend can be added later as a new backend only — no
+  rewrite.
+
+## Package entry points
+
+traderzview ships three tree-shakable subpaths:
+
+| Import | What it is |
+| --- | --- |
+| `traderzview` | The chart, series, scales, panes, crosshair, options, and events — the public API. |
+| `traderzview/gfx` | The rendering seam — the draw-command vocabulary + `DisplayListBuilder`, for writing a custom backend or consuming the command stream. |
+| `traderzview/extras` | Optional plugins: markers, watermarks, the drawing-tool host, the EMA indicator, multi-chart sync, and non-time-scale behaviors. Each is independently tree-shakable. |
+
+## Architecture
+
+Views convert model state into renderer-ready **draw commands** (a small, fixed vocabulary); a
+**backend** replays those commands. The Canvas 2D backend is the v1 reference implementation. Strict
+import walls between layers (`core → fmt → gfx / data → model → views / backend-canvas → host → api →
+extras`) are enforced mechanically by TypeScript project references and dependency-cruiser, so the
+seam between "what to draw" and "how to draw it" can never erode. Extension seams for drawing tools,
+indicators, and multi-chart layouts are designed-in and proven in-tree, so app-level features arrive
+as additions, not rework.
 
 ## License
 
