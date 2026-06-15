@@ -41,4 +41,16 @@ await build({ ...pluginShared, entryPoints: ['src/extras/markers/up-down-markers
 await build({ ...pluginShared, entryPoints: ['src/extras/watermark/text-watermark.ts'], outfile: 'dist/extras/text-watermark.mjs' });
 await build({ ...pluginShared, entryPoints: ['src/extras/watermark/image-watermark.ts'], outfile: 'dist/extras/image-watermark.mjs' });
 
-console.log('build: dist/index.mjs (E1), dist/gfx.mjs (E5), dist/extras.mjs + 4 per-plugin increments');
+// M13 per-seam increments (.size-limit.js "extras increments over E2" — the four
+// extensibility-seam proofs). Same external-engine bundling as the M12 plugins: the
+// cap measures the seam's MARGINAL code, with gfx/core/fmt/api/shared marked external.
+// The behaviors share one module (price-axis + yield-curve), so a tree-shaken per-seam
+// entry isolates each behavior's marginal cost (priceAxis / yieldCurve <= 1.5 KB each).
+await build({ ...pluginShared, entryPoints: ['src/extras/tools/tool-host.ts'], outfile: 'dist/extras/tool-host.mjs' });
+await build({ ...pluginShared, entryPoints: ['src/extras/sync/sync-group.ts'], outfile: 'dist/extras/sync-group.mjs' });
+await build({ ...pluginShared, entryPoints: ['src/extras/indicators/ema.ts'], outfile: 'dist/extras/ema.mjs' });
+const behaviorsDir = 'src/extras/behaviors';
+await build({ ...pluginShared, stdin: { contents: "export { priceAxisBehavior } from './price-axis-behavior';", resolveDir: behaviorsDir, sourcefile: 'price-axis-entry.ts', loader: 'ts' }, outfile: 'dist/extras/price-axis.mjs' });
+await build({ ...pluginShared, stdin: { contents: "export { yieldCurveBehavior } from './price-axis-behavior';", resolveDir: behaviorsDir, sourcefile: 'yield-curve-entry.ts', loader: 'ts' }, outfile: 'dist/extras/yield-curve.mjs' });
+
+console.log('build: dist/index.mjs (E1), dist/gfx.mjs (E5), dist/extras.mjs + 4 plugin + 5 M13-seam increments');

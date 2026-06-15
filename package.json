@@ -11,7 +11,12 @@
   "exports": {
     ".": "./dist/index.mjs",
     "./gfx": "./dist/gfx.mjs",
-    "./extras": "./dist/extras.mjs"
+    "./extras": "./dist/extras.mjs",
+    "./extras/tool-host": "./dist/extras/tool-host.mjs",
+    "./extras/sync-group": "./dist/extras/sync-group.mjs",
+    "./extras/ema": "./dist/extras/ema.mjs",
+    "./extras/price-axis": "./dist/extras/price-axis.mjs",
+    "./extras/yield-curve": "./dist/extras/yield-curve.mjs"
   },
   "files": [
     "dist"

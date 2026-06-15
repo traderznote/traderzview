@@ -54,4 +54,38 @@ export default [
     limit: '1.5 KB',
     brotli: true,
   },
+  // The M13 extensibility-seam proofs (design 05 §4–§7), each its own marginal-cost
+  // bundle so the per-seam caps measure the seam's own code in isolation (the
+  // "extras increments over E2" row above: ToolHost 3.0 / SyncGroup 1.0 / emaIndicator
+  // 1.0 / priceAxis,yieldCurve 1.5 each).
+  {
+    name: 'extras/tool-host',
+    path: 'dist/extras/tool-host.mjs',
+    limit: '3 KB',
+    brotli: true,
+  },
+  {
+    name: 'extras/sync-group',
+    path: 'dist/extras/sync-group.mjs',
+    limit: '1 KB',
+    brotli: true,
+  },
+  {
+    name: 'extras/ema',
+    path: 'dist/extras/ema.mjs',
+    limit: '1 KB',
+    brotli: true,
+  },
+  {
+    name: 'extras/price-axis',
+    path: 'dist/extras/price-axis.mjs',
+    limit: '1.5 KB',
+    brotli: true,
+  },
+  {
+    name: 'extras/yield-curve',
+    path: 'dist/extras/yield-curve.mjs',
+    limit: '1.5 KB',
+    brotli: true,
+  },
 ];
