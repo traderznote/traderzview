@@ -317,3 +317,90 @@ describe('timeBehavior — timezoneOffset', () => {
     expect(b.timezoneOffset).toBeUndefined();
   });
 });
+
+describe('timeBehavior({ timezoneOffset }) — FIX 5 constructor injection / FIX 4 consult', () => {
+  test('no args → the SAME identity-stable singleton (zero behavior change)', () => {
+    expect(timeBehavior()).toBe(timeBehavior());
+    expect(timeBehavior(undefined)).toBe(timeBehavior());
+    expect(timeBehavior({}).timezoneOffset).toBeUndefined(); // empty options → no hook
+  });
+
+  test('with timezoneOffset → a DISTINCT behavior whose hook returns the offset for the item', () => {
+    const b = timeBehavior({ timezoneOffset: () => 3600 });
+    expect(b).not.toBe(timeBehavior()); // not the singleton (additive, opt-in)
+    expect(typeof b.timezoneOffset).toBe('function');
+    const conv = b.toInternal([ts(2024, 3, 5, 1, 0, 0)]);
+    const internal = conv(ts(2024, 3, 5, 1, 0, 0));
+    expect(b.timezoneOffset!(internal)).toBe(3600);
+  });
+
+  test('the hook receives the item UTC seconds (so an IANA-style offset fn can resolve)', () => {
+    let seen = -1;
+    const b = timeBehavior({ timezoneOffset: (utc) => ((seen = utc), 0) });
+    const conv = b.toInternal([{ year: 2024, month: 3, day: 15 }]);
+    const internal = conv({ year: 2024, month: 3, day: 15 });
+    b.timezoneOffset!(internal);
+    expect(seen).toBe(ts(2024, 3, 15)); // UTC-midnight seconds of the business day
+  });
+
+  test('FIX 4 formatTick: a +3600s offset shifts the DISPLAYED hour; storage stays UTC', () => {
+    const b = timeBehavior({ timezoneOffset: () => 3600 }); // +1h
+    const utc = ts(2024, 3, 5, 14, 0, 0); // 14:00 UTC
+    const conv = b.toInternal([utc]);
+    const internal = conv(utc);
+    // intraday (hour band) weight → an HH:mm label rendered in the SHIFTED wall clock = 15:00.
+    expect(b.formatTick(internal, 30, loc(), fmtOpts({ timeVisible: true }))).toBe('15:00');
+    // storage untouched: the stored UTC seconds are unchanged.
+    expect(internal.timestamp).toBe(utc);
+    // and the default (no-offset) singleton renders the UTC hour 14:00 — byte-identical to today.
+    const def = timeBehavior();
+    const dconv = def.toInternal([utc]);
+    expect(def.formatTick(dconv(utc), 30, loc(), fmtOpts({ timeVisible: true }))).toBe('14:00');
+  });
+
+  test('FIX 4 formatTick: a day-coarser offset can roll the displayed DAY over a boundary', () => {
+    const b = timeBehavior({ timezoneOffset: () => 3600 }); // +1h
+    // 23:30 UTC on Mar 5 → 00:30 local Mar 6 under +1h: the day-of-month label is 6, not 5.
+    const utc = ts(2024, 3, 5, 23, 30, 0);
+    const conv = b.toInternal([utc]);
+    expect(b.formatTick(conv(utc), 50, loc(), fmtOpts())).toBe('6'); // day weight → shifted DOM
+    // default singleton: still the UTC day (5).
+    const def = timeBehavior();
+    expect(def.formatTick(def.toInternal([utc])(utc), 50, loc(), fmtOpts())).toBe('5');
+  });
+
+  test('FIX 4 fillWeights: a +3600s offset buckets day boundaries on the SHIFTED instant', () => {
+    const b = timeBehavior({ timezoneOffset: () => 3600 }); // +1h
+    // two UTC instants on the SAME UTC date (Mar 5) that straddle LOCAL midnight under +1h:
+    // 22:30 UTC (Mar 5 local 23:30) and 23:30 UTC (Mar 6 local 00:30).
+    const t1 = ts(2024, 3, 5, 22, 30, 0);
+    const t2 = ts(2024, 3, 5, 23, 30, 0);
+    const points = [t1, t2].map((t) => ({
+      item: { timestamp: t } as TimeInternal,
+      key: t as unknown as HorzKey,
+      weight: 0,
+    }));
+    b.fillWeights(points, 0);
+    expect(points[1].weight).toBe(50); // a LOCAL day boundary the UTC clock does not show
+    // default singleton: same two instants are an hour band within the same UTC day → 30.
+    const def = timeBehavior();
+    const dpoints = [t1, t2].map((t) => ({
+      item: { timestamp: t } as TimeInternal,
+      key: t as unknown as HorzKey,
+      weight: 0,
+    }));
+    def.fillWeights(dpoints, 0);
+    expect(dpoints[1].weight).toBe(30); // hour1 boundary, UTC — byte-identical to today
+  });
+
+  test('FIX 4 fillWeights: NO offset is byte-identical to the bare singleton (regression)', () => {
+    const tss = [ts(2024, 3, 15), ts(2024, 3, 16), ts(2024, 3, 17)];
+    const mkPts = () =>
+      tss.map((t) => ({ item: { timestamp: t } as TimeInternal, key: t as unknown as HorzKey, weight: 0 }));
+    const a = mkPts();
+    const c = mkPts();
+    timeBehavior().fillWeights(a, 0);
+    timeBehavior({}).fillWeights(c, 0); // empty options → singleton path
+    expect(c.map((p) => p.weight)).toEqual(a.map((p) => p.weight));
+  });
+});

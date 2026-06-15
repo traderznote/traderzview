@@ -246,6 +246,72 @@ describe('createChartWith — §2/§10/§11.1 wiring regressions', () => {
   });
 });
 
+// --- FIX 6: makeTimeScaleHandle wires the real timeline + geometry conversions ---------
+describe('createChartWith — time-scale conversions are LIVE after setData (FIX 6)', () => {
+  // UTC-midnight seconds for a yyyy-mm-dd business day (the behavior key for CANDLES).
+  const keyOf = (iso: string): number => {
+    const d = new Date(iso);
+    return Math.round(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 1000);
+  };
+
+  test('coordinateToLogical / logicalToCoordinate return real numbers (not null) after setData', () => {
+    const { chart, raf } = setup();
+    const s = chart.addSeries(CandlestickSeries);
+    const ts = chart.timeScale();
+    // empty scale before data: conversions are null (kept §16.1) and the scale reports empty.
+    expect(ts.coordinateToLogical(100)).toBeNull();
+    s.setData(CANDLES);
+    raf.flush(16);
+    const lg = ts.coordinateToLogical(300);
+    expect(lg).not.toBeNull();
+    expect(Number.isFinite(lg as number)).toBe(true);
+    const x = ts.logicalToCoordinate(0);
+    expect(x).not.toBeNull();
+    expect(Number.isFinite(x as number)).toBe(true);
+    // round-trip: coordinateToLogical ∘ logicalToCoordinate is identity (continuous inverse).
+    const back = ts.coordinateToLogical(x as number);
+    expect(back as number).toBeCloseTo(0, 6);
+  });
+
+  test('keyToLogical / logicalToKey / keysInRange return real values over the live timeline', () => {
+    const { chart, raf } = setup();
+    const s = chart.addSeries(CandlestickSeries);
+    s.setData(CANDLES);
+    raf.flush(16);
+    const ts = chart.timeScale();
+    const k0 = keyOf('2026-01-05');
+    const k2 = keyOf('2026-01-07');
+    // key → logical: the first/last data keys land on slots 0 and 2.
+    expect(ts.keyToLogical(k0)).toBe(0);
+    expect(ts.keyToLogical(k2)).toBe(2);
+    // logical → key: the inverse on the integer slots.
+    expect(ts.logicalToKey(0)).toBe(k0 as never);
+    expect(ts.logicalToKey(2)).toBe(k2 as never);
+    // keysInRange over the whole grid returns all three real slot keys (NOT the [] stub).
+    const keys = ts.keysInRange({ from: 0, to: 2 });
+    expect(keys.length).toBe(3);
+    expect(keys[0]).toBe(k0 as never);
+    expect(keys[2]).toBe(k2 as never);
+  });
+
+  test('timeToCoordinate / timeToLogical / snapToBar resolve through behavior.key → timeline → geometry', () => {
+    const { chart, raf } = setup();
+    const s = chart.addSeries(CandlestickSeries);
+    s.setData(CANDLES);
+    raf.flush(16);
+    const ts = chart.timeScale();
+    // a data time maps to its logical slot and a finite coordinate.
+    expect(ts.timeToLogical('2026-01-06' as never)).toBe(1);
+    const c = ts.timeToCoordinate('2026-01-06' as never);
+    expect(c).not.toBeNull();
+    expect(Number.isFinite(c as number)).toBe(true);
+    // snapToBar of a fractional logical lands on an integer slot.
+    expect(ts.snapToBar(1.4)).toBe(2); // nearest-slot 'right' of the interpolated key
+    // isEmpty is false now there is data: a setVisibleLogicalRange no longer no-ops on empty.
+    expect(ts.getVisibleLogicalRange()).not.toBeNull();
+  });
+});
+
 // --- M11 parity INTEGRATE: the deferred behaviors wired into the running chart ---------
 describe('createChartWith — M11 parity wiring (price-line render + screenshot toggle)', () => {
   test('createPriceLine registers a SceneSource that PAINTS a horizontal line above the series (M9 deferral closed)', () => {

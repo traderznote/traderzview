@@ -269,6 +269,24 @@ describe('S1 — timezoneTimeBehavior: offset hook drives bucketing + labels (ex
     const off = offsetFor('Not/AZone');
     expect(off(Math.floor(Date.now() / 1000))).toBe(0);
   });
+
+  test('A-5: timezoneTimeBehavior routes through the CORE timeBehavior seam (FIX 5)', () => {
+    // The label shift now comes from the core's own formatTick (FIX 4), not an extras
+    // reimplementation. We prove the wired behavior shifts the displayed DAY too — a path
+    // the extras file no longer owns — and that a UTC chart (offset 0) is unaffected.
+    const beh = timezoneTimeBehavior(NY);
+    // 02:00 UTC on 2026-06-15 EDT (−4h) = 22:00 the PREVIOUS local day (Jun 14). A day-weight
+    // tick renders the LOCAL day-of-month = 14, proving the core consulted the injected hook.
+    const t = Math.floor(Date.UTC(2026, 5, 15, 2, 0, 0) / 1000);
+    const item = { timestamp: t } as never;
+    const loc = { tickMarkFormatter: undefined, locale: 'en-US', dateFormat: "dd MMM ''yy" } as never;
+    const fmt = { timeVisible: false, secondsVisible: false, tickMarkFormatter: undefined } as never;
+    expect(beh.formatTick(item, 50, loc, fmt)).toBe('14'); // shifted day-of-month (local Jun 14)
+
+    // a UTC-zone wiring (offset 0) renders the unshifted UTC day (15) — the core default path.
+    const utcBeh = timezoneTimeBehavior('UTC');
+    expect(utcBeh.formatTick(item, 50, loc, fmt)).toBe('15');
+  });
 });
 
 // =====================================================================================

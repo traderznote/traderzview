@@ -6,7 +6,7 @@
 // glue between the headless model/views and the DOM host: the data pipeline (Timeline +
 // PlotStore + SeriesKind → PaneScene SceneSource), the §2 cached-handle ports, and the
 // §14 event hubs the host pointer pipeline fires.
-import type { Coordinate, DeepPartial, IFrameCounters } from '../core';
+import type { Coordinate, DeepPartial, HorzKey, IFrameCounters, Logical } from '../core';
 import { createFrameCounters } from '../core';
 import type { DisplayList, IRenderBackend, SceneSource, ViewFrame } from '../gfx';
 import { DisplayListBuilder, ZBand } from '../gfx';
@@ -20,7 +20,7 @@ import {
   buildHorzGeometry,
   buildPriceConverter,
 } from '../model';
-import type { Pane, ChartOptions, IPrimitive as ModelIPrimitive } from '../model';
+import type { HorzGeometry, Pane, ChartOptions, IPrimitive as ModelIPrimitive } from '../model';
 import { ChartHost, createRafScheduler } from '../host';
 import type {
   ChartHostHooks,
@@ -336,7 +336,14 @@ export function createChartWith<H = Time>(
       for (const w of wired.values()) if (w.pane === pane) binder.detachOwner(w.model);
     },
     createPane: (pane) => paneHandle(pane),
-    createTimeScale: () => makeTimeScaleHandle<H>(model, behavior, disposed, liveBarSpacing),
+    createTimeScale: () =>
+      // FIX 6: the pane width the geometry uses — the chart's width minus the right price-axis
+      // the measure hook reserves (RIGHT_AXIS_WIDTH). This reconstructs the host layout's
+      // paneWidth for the default single right-axis case; the host's exact live paneWidth is
+      // not exposed through this seam (see makeTimeScaleHandle's note).
+      makeTimeScaleHandle<H>(model, behavior, disposed, liveBarSpacing, timeline, () =>
+        Math.max(0, size.width - RIGHT_AXIS_WIDTH),
+      ),
     createPriceScale: (pane, scaleId) => priceScaleHandle(pane, scaleId),
     setCrosshairPosition: (price, horzItem, series) => {
       model.invalidate(UpdateLevel.Overlay);
@@ -845,38 +852,84 @@ function makePriceScaleHandle(
   return { handle: createPriceScaleApi({ port }) as unknown as IPriceScale, alive };
 }
 
+// The right price-axis width the measure hook (buildHost) reserves. The handle's pane-width
+// is derived from it (see makeTimeScaleHandle's geometry note); both must stay in sync.
+const RIGHT_AXIS_WIDTH = 60;
+
 function makeTimeScaleHandle<H>(
   model: ChartModel<H>,
   behavior: IHorzScaleBehavior<H>,
   disposed: DisposedCell,
   barSpacing: () => number,
+  timeline: Timeline<ItemWithTime, H, unknown>,
+  paneWidth: () => number,
 ): ITimeScale<H> {
+  // FIX 6: wire the real conversions over the shared `timeline` (key↔logical/keysInRange/
+  // nearest-slot — all PUBLIC) and a chart-level HorzGeometry built ON DEMAND. The geometry's
+  // four params mirror what the series renders with (wireSeries.rebuild): barSpacing/rightOffset
+  // from the live model options, baseIndex = the newest slot. NOTE the pane WIDTH is an
+  // approximation — the exact value comes from the host layout (computeLayout's paneWidth =
+  // requested.width − leftAxis − rightAxis); we reconstruct it as paneWidth() (the chart's
+  // initial width − RIGHT_AXIS_WIDTH) because the host does not expose its live paneWidth
+  // through this seam. For the default single right-axis layout this equals the host value.
+  const rightOffsetOf = (): number =>
+    (model.options() as { timeScale?: { rightOffset?: number } }).timeScale?.rightOffset ?? 0;
+  const geom = (): HorzGeometry =>
+    buildHorzGeometry({
+      width: paneWidth(),
+      barSpacing: barSpacing(),
+      rightOffset: rightOffsetOf(),
+      baseIndex: timeline.slotCount - 1,
+    });
+  // time → logical via the behavior key then the timeline; logical → coordinate via geometry.
+  const timeToLogical = (time: H): Logical | null =>
+    timeline.keyToLogical(behavior.key(time) as unknown as HorzKey);
   return createTimeScaleApi<H>({
     port: {
       isDisposed: () => disposed.value,
-      isEmpty: () => true,
+      isEmpty: () => timeline.slotCount === 0,
       key: (item) => behavior.key(item) as unknown as number,
-      scrollPosition: () => 0,
+      scrollPosition: () => rightOffsetOf(),
       scrollToPosition: () => {},
       scrollToRealTime: () => {},
       fitContent: () => model.invalidate(UpdateLevel.Render),
       reset: () => model.invalidate(UpdateLevel.Render),
+      // Logical-range get/set: the model time-scale navigator is not exposed through this
+      // seam yet, so we READ a sensible [0, last] from the geometry's visible range and the
+      // SETTER is a no-op pending the navigator (note for the future seam).
       getVisibleRange: () => null,
       setVisibleRange: () => {},
-      getVisibleLogicalRange: () => null,
-      setVisibleLogicalRange: () => {},
-      logicalToCoordinate: () => null,
-      coordinateToLogical: () => null,
-      snapToBar: () => null,
-      timeToCoordinate: () => null,
+      getVisibleLogicalRange: () =>
+        timeline.slotCount === 0 ? null : (geom().visibleLogicalRange() as LogicalRange | null),
+      setVisibleLogicalRange: () => {}, // no-op pending the model navigator (FIX 6 note)
+      logicalToCoordinate: (logical) =>
+        timeline.slotCount === 0 ? null : (geom().indexToCoordinate(logical) as unknown as Coordinate),
+      coordinateToLogical: (x) => (timeline.slotCount === 0 ? null : geom().coordinateToLogical(x)),
+      // snapToBar: the integer bar a (fractional) logical lands on, via the timeline's total
+      // nearest-slot search keyed by the logical's interpolated key (architecture §13.14).
+      snapToBar: (logical) => {
+        if (timeline.slotCount === 0) return null;
+        const key = timeline.logicalToKey(logical as unknown as Logical, { extrapolate: true });
+        if (key === null) return null;
+        return timeline.nearestSlotAt(key, 'right') as unknown as Logical;
+      },
+      timeToCoordinate: (time) => {
+        const lg = timeToLogical(time);
+        return lg === null ? null : (geom().indexToCoordinate(lg) as unknown as Coordinate);
+      },
       coordinateToTime: () => null,
-      timeToLogical: () => null,
-      keyToLogical: () => null,
-      logicalToKey: () => null,
-      keysInRange: () => [],
+      timeToLogical: (time) => timeToLogical(time),
+      keyToLogical: (key, extrapolate) => timeline.keyToLogical(key as unknown as HorzKey, { extrapolate }),
+      logicalToKey: (logical, extrapolate) =>
+        timeline.logicalToKey(logical as unknown as Logical, { extrapolate }),
+      keysInRange: (range) =>
+        timeline.keysInRange({
+          from: range.from as unknown as Logical,
+          to: range.to as unknown as Logical,
+        }) as unknown as readonly HorzKey[],
       barSpacing,
-      rightOffset: () => 0,
-      width: () => 0,
+      rightOffset: rightOffsetOf,
+      width: paneWidth,
       height: () => 0,
       events: {
         visibleTimeRange: new EventHub<[TimeRange<H> | null]>(),
@@ -924,7 +977,7 @@ function buildHost<H>(
         rightAxis: { kind: 'price-axis', scene: newScene() },
       })),
     measure: (): MeasuredAxes => ({
-      axisWidths: { left: 0, right: 60 },
+      axisWidths: { left: 0, right: RIGHT_AXIS_WIDTH },
       timeAxisHeight: 28,
       timeAxis: { kind: 'time-axis', scene: newScene() },
       leftStub: { kind: 'time-axis', scene: newScene() },

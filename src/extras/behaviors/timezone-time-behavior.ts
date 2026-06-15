@@ -14,27 +14,16 @@
 //
 // Per A-5, the canonical wiring is `timezoneTimeBehavior(tz) ≡ timeBehavior({
 // timezoneOffset: offsetFor(tz) })` — constructor injection into the CORE time behavior,
-// whose fillWeights/formatTick consult `this.timezoneOffset`. The shipped public
-// `timeBehavior()` takes NO options and its fillWeights/formatTick do not yet read the
-// hook (see missingSeams), so this factory installs the hook AND supplies the offset-aware
-// fillWeights/formatTick itself, delegating every UTC-invariant member (key/cacheKey/
-// toInternal/maxTickWeight/augmentDefaults) to the base behavior — reimplementing nothing
-// the core already owns beyond the two methods the hook is meant to steer. When the core
-// gains the §7.1 consult, this collapses to the one-line A-5 form with no caller change.
+// whose fillWeights/formatTick consult `this.timezoneOffset`. The core now ships that
+// §7.1 consult (the FIX 4/5 seam), so this factory collapses to exactly the one-line A-5
+// form: it resolves the IANA zone to an offset fn HERE in extras and hands it to the core
+// constructor. The core owns the offset-aware fillWeights/formatTick (bucketing on the
+// shifted instant + rendering shifted wall-clock fields); extras reimplements NONE of it.
 //
-// Built ONLY on the PUBLIC api seams (timeBehavior value export + IHorzScaleBehavior /
-// HorzPoint / Time types, design 02 §3.1/§13.3) + the core HorzKey brand — never model/
-// views (arch §3.1; dep-cruiser E1).
+// Built ONLY on the PUBLIC api seams (timeBehavior value export + IHorzScaleBehavior / Time
+// types, design 02 §3.1/§13.3) — never model/views (arch §3.1; dep-cruiser E1).
 import { timeBehavior } from '../../api';
-import type { HorzPoint, IHorzScaleBehavior, Time } from '../../api';
-
-// The behavior's opaque internal item is the base time behavior's `{ timestamp; businessDay? }`
-// (design 02 §13.3). It is NOT on the public barrel, so we model the one field we read
-// (the UTC timestamp in seconds) structurally — never importing data/horz-behavior deeply.
-interface TimeInternalLike {
-  readonly timestamp: number; // UTC seconds
-  readonly businessDay?: { year: number; month: number; day: number };
-}
+import type { IHorzScaleBehavior, Time } from '../../api';
 
 // --- IANA → offset (seconds), memoized per ~6-month DST segment (design 05 §7.1) -----
 
@@ -96,126 +85,28 @@ export function offsetFor(tz: string): (utc: number) => number {
   };
 }
 
-// --- session-local weight buckets (mirror the core bands on the SHIFTED instant) ------
-
-const W_YEAR = 70;
-const W_MONTH = 60;
-const W_DAY = 50;
-const W_HOUR = 30;
-const W_MINUTE = 20;
-const W_SECOND = 10;
-const W_SUBSECOND = 0;
-
-/** Weight between two SHIFTED (session-local) instants in ms — the core's day/hour/…
- *  ladder evaluated on wall-clock fields so a session boundary bolds in LOCAL time. */
-function localWeight(curMs: number, prevMs: number): number {
-  const c = new Date(curMs);
-  const p = new Date(prevMs);
-  if (c.getUTCFullYear() !== p.getUTCFullYear()) return W_YEAR;
-  if (c.getUTCMonth() !== p.getUTCMonth()) return W_MONTH;
-  if (c.getUTCDate() !== p.getUTCDate()) return W_DAY;
-  if (c.getUTCHours() !== p.getUTCHours()) return W_HOUR;
-  if (c.getUTCMinutes() !== p.getUTCMinutes()) return W_MINUTE;
-  if (c.getUTCSeconds() !== p.getUTCSeconds()) return W_SECOND;
-  return W_SUBSECOND;
-}
-
-/** Two-digit zero-pad. */
-function pad2(n: number): string {
-  return n < 10 ? `0${n}` : String(n);
-}
-
-// --- the wrapped behavior -----------------------------------------------------------
+// --- the A-5 wired behavior ----------------------------------------------------------
 
 /**
  * The session-local time behavior (design 05 §7.1 / A-5). `tz` is an IANA zone name
- * (`'America/New_York'`, `'Asia/Tokyo'`, …). Returns an IHorzScaleBehavior<Time>:
+ * (`'America/New_York'`, `'Asia/Tokyo'`, …). The IANA→offset resolution lives ENTIRELY
+ * here in extras ({@link offsetFor}); the resolved offset fn is injected into the CORE
+ * time behavior via the FIX 5 seam, so:
  *
- *  - `timezoneOffset(item)` — the A-5 hook, installed here (offset in SECONDS at the
- *    item's UTC instant via {@link offsetFor}).
- *  - `fillWeights` buckets on `utc + offset(utc)` so day/session boundaries land at LOCAL
- *    midnight (S1) — minting weights on the same open scale the core uses.
- *  - `formatTick` / `formatItem` render SHIFTED wall-clock fields (HH:mm local, the local
- *    calendar date) — UTC storage unchanged.
- *  - every UTC-invariant member (`key`/`cacheKey`/`toInternal`/`maxTickWeight`/
- *    `augmentDefaults`) delegates to the base `timeBehavior()` (no reimplementation).
+ *  - `timezoneOffset(item)` — the A-5 hook, wired by the core from `offsetFor(tz)`.
+ *  - `fillWeights` (core) buckets on `utc + offset(utc)` so day/session boundaries land at
+ *    LOCAL midnight (S1).
+ *  - `formatTick` (core) renders SHIFTED wall-clock fields (the local hour/day) — UTC
+ *    storage unchanged (study 03 §5: never re-key data; display + bucketing only).
+ *  - every other member is the core's own (key/cacheKey/toInternal/maxTickWeight/
+ *    augmentDefaults/formatItem) — extras reimplements NOTHING.
  *
  * CAVEAT (study 03 §5, repeated): a user `timeFormatter`/`tickMarkFormatter` that itself
  * calls a locale formatter may consult the ENVIRONMENT zone; the shift here covers the
  * library's own default rendering and the weight bucketing.
  */
 export function timezoneTimeBehavior(tz: string): IHorzScaleBehavior<Time> {
-  const base = timeBehavior() as unknown as IHorzScaleBehavior<Time, TimeInternalLike>;
-  const offset = offsetFor(tz);
-  // The UTC seconds for an internal item: a business-day item is UTC midnight; a timestamp
-  // item is its instant. (Mirrors the base behavior's instantOf, on the field we can read.)
-  const utcSecondsOf = (item: TimeInternalLike): number => {
-    if (item.businessDay !== undefined) {
-      return Math.round(Date.UTC(item.businessDay.year, item.businessDay.month - 1, item.businessDay.day) / 1000);
-    }
-    return item.timestamp;
-  };
-  // The SHIFTED instant (ms) whose UTC-read fields equal the zone's wall clock.
-  const shiftedMs = (item: TimeInternalLike): number => {
-    const utc = utcSecondsOf(item);
-    return (utc + offset(utc)) * 1000;
-  };
-
-  const wrapped: IHorzScaleBehavior<Time, TimeInternalLike> = {
-    // --- delegated, UTC-invariant members (the core already owns these) -------------
-    key: (item) => base.key(item),
-    cacheKey: (item) => base.cacheKey(item),
-    toInternal: (items) => base.toInternal(items),
-    maxTickWeight: (weights) => base.maxTickWeight(weights),
-    augmentDefaults: (defaults) => base.augmentDefaults(defaults),
-
-    // --- the A-5 hook installed in extras (offset in seconds at the item's instant) --
-    timezoneOffset: (item) => offset(utcSecondsOf(item)),
-
-    // --- offset-aware bucketing (S1): the core's ladder on the SHIFTED instant -------
-    fillWeights: (points: readonly HorzPoint<TimeInternalLike>[], startIndex: number): void => {
-      const n = points.length;
-      if (n === 0) return;
-      let prevMs = startIndex > 0 ? shiftedMs(points[startIndex - 1]!.item) : null;
-      let totalDiff = 0;
-      for (let i = startIndex; i < n; i++) {
-        const curMs = shiftedMs(points[i]!.item);
-        if (prevMs !== null) {
-          points[i]!.weight = localWeight(curMs, prevMs);
-          totalDiff += curMs - prevMs;
-        }
-        prevMs = curMs;
-      }
-      if (startIndex === 0 && n > 1) {
-        const avg = Math.ceil(totalDiff / (n - 1));
-        const firstMs = shiftedMs(points[0]!.item);
-        points[0]!.weight = localWeight(firstMs, firstMs - avg);
-      }
-    },
-
-    // --- offset-aware labels (S1): render SHIFTED wall-clock fields ------------------
-    formatTick: (item, weight, loc, fmt) => {
-      // a user tickMarkFormatter still wins (it gets the original UTC value via the base).
-      if (fmt.tickMarkFormatter !== undefined) {
-        const t = base.formatTick(item, weight, loc, fmt);
-        return t; // the base routed it through the user hook already
-      }
-      const d = new Date(shiftedMs(item));
-      // day-or-coarser weights → local calendar date; finer → local HH:mm(:ss).
-      if (weight >= W_DAY) return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
-      const hm = `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
-      return fmt.secondsVisible && weight <= W_SECOND ? `${hm}:${pad2(d.getUTCSeconds())}` : hm;
-    },
-    formatItem: (item, loc, fmt) => {
-      if (loc.timeFormatter !== undefined) return base.formatItem(item, loc, fmt);
-      const d = new Date(shiftedMs(item));
-      const date = `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
-      if (!fmt.timeVisible) return date;
-      const hm = `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
-      const time = fmt.secondsVisible ? `${hm}:${pad2(d.getUTCSeconds())}` : hm;
-      return `${date}   ${time}`;
-    },
-  };
-
-  return wrapped as unknown as IHorzScaleBehavior<Time>;
+  // The canonical A-5 form: resolve IANA→offset in extras, inject into the core seam. The
+  // core's offset-aware fillWeights/formatTick (FIX 4) do the shifted bucketing + labels.
+  return timeBehavior({ timezoneOffset: offsetFor(tz) }) as unknown as IHorzScaleBehavior<Time>;
 }

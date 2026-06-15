@@ -130,6 +130,28 @@ function instantOf(item: TimeInternal): Date {
     : new Date(item.timestamp * 1000);
 }
 
+// The UTC seconds an item occupies (study 03 §3.4): a business-day item is UTC midnight,
+// a timestamp item its instant. Used ONLY to feed the timezoneOffset hook — storage stays
+// UTC (study 03 §5: never mutate the stored time, only the display).
+function utcSecondsOf(item: TimeInternal): number {
+  return item.businessDay !== undefined
+    ? Math.round(Date.UTC(item.businessDay.year, item.businessDay.month - 1, item.businessDay.day) / 1000)
+    : item.timestamp;
+}
+
+/**
+ * The instant a tick/label renders, SHIFTED into the behavior's wall clock when a
+ * `timezoneOffset` hook is configured (FIX 4 / design 02 §3.1 / A-5). The shift moves the
+ * UTC instant by the hook's offset (seconds) so the UTC-read fields (getUTC*) equal the
+ * configured wall clock — for DISPLAY + WEIGHT bucketing only; the stored time is never
+ * mutated (study 03 §5 invariant). With NO hook this is exactly `instantOf` (byte-identical).
+ */
+function displayInstantOf(self: IHorzScaleBehavior<Time, TimeInternal>, item: TimeInternal): Date {
+  if (self.timezoneOffset === undefined) return instantOf(item);
+  const utc = utcSecondsOf(item);
+  return new Date((utc + self.timezoneOffset(item)) * 1000);
+}
+
 /** The user value `originalTime` would round-trip — what user formatters receive. */
 function originalOf(item: TimeInternal): Time {
   return item.businessDay !== undefined ? { ...item.businessDay } : (item.timestamp as UTCTimestamp);
@@ -159,8 +181,7 @@ function weightToType(weight: number, timeVisible: boolean, secondsVisible: bool
   return weight <= WEIGHT_SECOND && secondsVisible ? TickMarkType.TimeWithSeconds : TickMarkType.Time;
 }
 
-function defaultTickLabel(item: TimeInternal, type: TickMarkType, locale: string): string {
-  const d = instantOf(item);
+function defaultTickLabel(d: Date, type: TickMarkType, locale: string): string {
   switch (type) {
     case TickMarkType.Year:
       return String(d.getUTCFullYear());
@@ -223,16 +244,28 @@ const timeBehaviorImpl: IHorzScaleBehavior<Time, TimeInternal> = {
       const out = fmt.tickMarkFormatter(originalOf(item), type, loc.locale);
       if (out !== null) return out;
     }
-    return defaultTickLabel(item, type, loc.locale);
+    // FIX 4: the displayed label renders on the SHIFTED instant when a timezoneOffset hook
+    // is configured (else `instantOf` — byte-identical to today). Storage stays UTC.
+    return defaultTickLabel(displayInstantOf(this, item), type, loc.locale);
   },
 
   fillWeights(points: readonly HorzPoint<TimeInternal>[], startIndex: number): void {
     const n = points.length;
     if (n === 0) return;
-    let prevMs = startIndex > 0 ? points[startIndex - 1].item.timestamp * 1000 : null;
+    // FIX 4: when a timezoneOffset hook is configured, weight bands bucket on the SHIFTED
+    // instant (so a LOCAL day/session boundary bolds where UTC does not); the stored time
+    // is never mutated (study 03 §5). With NO hook, `displayMs` reduces to the byte-
+    // identical `item.timestamp * 1000` (no businessDay path here — fillWeights always saw
+    // the raw timestamp, which for business-day items already equals UTC-midnight seconds).
+    const off = this.timezoneOffset;
+    const displayMs =
+      off === undefined
+        ? (item: TimeInternal): number => item.timestamp * 1000
+        : (item: TimeInternal): number => (utcSecondsOf(item) + off(item)) * 1000;
+    let prevMs = startIndex > 0 ? displayMs(points[startIndex - 1].item) : null;
     let totalTimeDiff = 0;
     for (let i = startIndex; i < n; i++) {
-      const curMs = points[i].item.timestamp * 1000;
+      const curMs = displayMs(points[i].item);
       if (prevMs !== null) {
         points[i].weight = weightByTime(curMs, prevMs);
         totalTimeDiff += curMs - prevMs;
@@ -242,7 +275,7 @@ const timeBehaviorImpl: IHorzScaleBehavior<Time, TimeInternal> = {
     if (startIndex === 0 && n > 1) {
       // the first point has no predecessor: invent one an average gap back.
       const avg = Math.ceil(totalTimeDiff / (n - 1));
-      const firstMs = points[0].item.timestamp * 1000;
+      const firstMs = displayMs(points[0].item);
       points[0].weight = weightByTime(firstMs, firstMs - avg);
     }
   },
@@ -261,7 +294,26 @@ const timeBehaviorImpl: IHorzScaleBehavior<Time, TimeInternal> = {
   },
 };
 
-/** Factory for the UTC time behavior (architecture §8: injected by createChart). */
-export function timeBehavior(): IHorzScaleBehavior<Time, TimeInternal> {
-  return timeBehaviorImpl;
+/**
+ * Factory for the UTC time behavior (architecture §8: injected by createChart). Additive
+ * options (FIX 5 / design 02 §3.1 / A-5):
+ *
+ *  - called with NO args → returns the shared singleton UNCHANGED (identity-stable, zero
+ *    behavior change — its `timezoneOffset` stays undefined so fillWeights/formatTick are
+ *    byte-identical to today; this is the path the demo goldens + the 1300 tests back).
+ *  - called with `{ timezoneOffset }` → returns a behavior that wires the optional
+ *    `timezoneOffset?(item)` hook so fillWeights/formatTick render on the SHIFTED instant
+ *    (LOCAL day/session bucketing + wall-clock labels), STORAGE staying UTC. The caller's
+ *    `timezoneOffset(utcSeconds)` is fed the item's UTC seconds; the rest of the strategy
+ *    surface is the singleton's (spread), so every UTC-invariant member is unchanged.
+ */
+export function timeBehavior(options?: {
+  timezoneOffset?: (utcSeconds: number) => number;
+}): IHorzScaleBehavior<Time, TimeInternal> {
+  if (options?.timezoneOffset === undefined) return timeBehaviorImpl;
+  const offset = options.timezoneOffset;
+  return {
+    ...timeBehaviorImpl,
+    timezoneOffset: (item: TimeInternal): number => offset(utcSecondsOf(item)),
+  };
 }
