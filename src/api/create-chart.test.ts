@@ -10,7 +10,8 @@ import { timeBehavior } from '../data';
 import type { IFrameScheduler } from '../host';
 import { ChartError } from './errors';
 import { CandlestickSeries, LineSeries } from './series-defs';
-import { createChartWith } from './create-chart';
+import { createChartWith, createLiveNav } from './create-chart';
+import { ChartModel, buildHorzGeometry } from '../model';
 
 // --- stub backend: one recording ISurface per createSurface() --------------------------
 function makeBackend(log: string[]): IRenderBackend {
@@ -395,5 +396,115 @@ describe('createChartWith — M11 parity wiring (price-line render + screenshot 
     chart.takeScreenshot({ includeCrosshair: false }); // explicit false → base only
     chart.takeScreenshot({ includeCrosshair: true });
     expect(composeCalls).toEqual([true, false, true]);
+  });
+});
+
+// --- Part B: the LIVE nav cell + the model-navigator math (pan/zoom/reset/fit) ---------
+describe('createLiveNav — pan/zoom/reset drive the live geometry (model-navigator math)', () => {
+  // A bare model (no host) is enough: createLiveNav reads only model.options().timeScale.
+  const makeNav = (n: number, width = 540) => {
+    const model = new ChartModel({ behavior: timeBehavior(), invalidate: () => {} });
+    return createLiveNav(model, () => n, () => width);
+  };
+  // The geometry the series + handle render with, from the live cell (mirrors rebuild).
+  const geomOf = (nav: ReturnType<typeof makeNav>, n: number, width = 540) =>
+    buildHorzGeometry({ width, barSpacing: nav.barSpacing(), rightOffset: nav.rightOffset(), baseIndex: n - 1 });
+
+  test('pan changes rightOffset and shifts indexToCoordinate by the pan distance', () => {
+    const n = 20;
+    const nav = makeNav(n);
+    const before = nav.rightOffset();
+    const xBefore = geomOf(nav, n).indexToCoordinate(n - 1); // the last bar's coordinate
+    nav.pan(30); // drag content right by 30 media px
+    const after = nav.rightOffset();
+    // ΔR = −dx/S < 0: dragging right reduces the right offset (study 03 §4.6).
+    expect(after).toBeLessThan(before);
+    const xAfter = geomOf(nav, n).indexToCoordinate(n - 1);
+    // The same logical index now sits ~30 px further right (Δx = −ΔR·S = dx).
+    expect(xAfter - xBefore).toBeCloseTo(30, 5);
+  });
+
+  test('pan is clamped by the navigator right-offset bound (cannot scroll past the extreme)', () => {
+    const n = 20;
+    const nav = makeNav(n);
+    for (let i = 0; i < 1000; i++) nav.pan(100); // hammer left far beyond the data
+    const r = nav.rightOffset();
+    // clampRightOffset bounds R; a huge pan does not run away to −∞.
+    expect(Number.isFinite(r)).toBe(true);
+    expect(r).toBeGreaterThan(-(n + 10)); // stays near the firstIndex − baseIndex bound
+  });
+
+  test('zoom in increases barSpacing; zoom out decreases it (clamped both ways)', () => {
+    const nav = makeNav(20);
+    const s0 = nav.barSpacing();
+    nav.zoom(1, 200); // +1 wheel notch → grow spacing
+    const sIn = nav.barSpacing();
+    expect(sIn).toBeGreaterThan(s0);
+    nav.zoom(-1, 200); // −1 notch → shrink
+    nav.zoom(-1, 200);
+    expect(nav.barSpacing()).toBeLessThan(sIn);
+    // never below the minBarSpacing floor (study 03 §4.5).
+    for (let i = 0; i < 200; i++) nav.zoom(-1, 200);
+    expect(nav.barSpacing()).toBeGreaterThanOrEqual(0.5);
+  });
+
+  test('fit sets barSpacing to W/N and rightOffset to 0 (fitContentWithPixels, px=0)', () => {
+    const n = 18;
+    const width = 540;
+    const nav = makeNav(n, width);
+    nav.zoom(1, 100); // perturb away from the fitted spacing first
+    nav.pan(40);
+    nav.fit();
+    expect(nav.barSpacing()).toBeCloseTo(width / n, 6); // S = W/N
+    expect(nav.rightOffset()).toBeCloseTo(0, 6); // R = 0
+  });
+
+  test('reset restores the option-default spacing/offset then re-fits (double-click §10)', () => {
+    const n = 18;
+    const width = 540;
+    const nav = makeNav(n, width);
+    nav.zoom(1, 100);
+    nav.zoom(1, 100);
+    nav.pan(120);
+    const movedS = nav.barSpacing();
+    nav.reset();
+    // reset re-fits all bars: spacing returns to the fitted W/N, offset to 0 — i.e. the
+    // moved state is gone (study 03 fit; architecture §10 double-click reset).
+    expect(nav.barSpacing()).not.toBe(movedS);
+    expect(nav.barSpacing()).toBeCloseTo(width / n, 6);
+    expect(nav.rightOffset()).toBeCloseTo(0, 6);
+  });
+
+  test('an empty timeline (N=0) is inert: pan/zoom/fit do not throw or produce NaN', () => {
+    const nav = makeNav(0);
+    expect(() => {
+      nav.pan(50);
+      nav.zoom(1, 100);
+      nav.fit();
+      nav.reset();
+    }).not.toThrow();
+    expect(Number.isFinite(nav.barSpacing())).toBe(true);
+    expect(Number.isFinite(nav.rightOffset())).toBe(true);
+  });
+});
+
+// --- Part B: a public fitContent() now FITS (drives the live cell + repaints) -----------
+describe('createChartWith — timeScale().fitContent() drives the live geometry (Part B)', () => {
+  test('fitContent() widens the live barSpacing to fit all bars and zeroes the right offset', () => {
+    const { chart, raf } = setup();
+    const s = chart.addSeries(CandlestickSeries);
+    s.setData(CANDLES); // 3 bars
+    raf.flush(16);
+    const ts = chart.timeScale();
+    const before = ts.barSpacing(); // the 6px option default, still live before fit
+    ts.fitContent();
+    raf.flush(32);
+    // 3 bars across the ~540px pane → W/N ≈ 180px ≫ the 6px default; rightOffset → 0.
+    expect(ts.barSpacing()).toBeGreaterThan(before);
+    expect(ts.scrollPosition()).toBeCloseTo(0, 6); // R = 0 after fit (scrollPosition = rightOffset)
+    // logicalToCoordinate of the last bar now uses the fitted (wide) spacing — finite.
+    const x = ts.logicalToCoordinate(2);
+    expect(x).not.toBeNull();
+    expect(Number.isFinite(x as number)).toBe(true);
   });
 });

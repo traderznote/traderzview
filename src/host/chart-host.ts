@@ -20,6 +20,8 @@ import { InteractionRouter } from './input/router';
 import { GestureMachine, type GesturePointer } from './input/gestures';
 import type { GestureEvent, SurfaceKind } from './input/types';
 import { registerDefaultBehaviors, type DefaultBehaviorPorts } from './input/behaviors';
+import { attachDomInput, type DomInputTarget, type WheelIntent } from './input/dom-input';
+import type { Unsubscribe, Coordinate } from '../core';
 import { captureScreenshot, type SnapshotComposer } from './screenshot';
 import { SurfaceHost, type HostElement, type SurfaceConfig, type SurfaceFactory } from './surface-host';
 
@@ -98,6 +100,10 @@ export interface ChartHostDeps {
   readonly hooks: ChartHostHooks;
   /** Device pixel ratio source (window.devicePixelRatio in prod; a fake in tests). */
   readonly getDpr: () => number;
+  /** User-facing wheel-speed multiplier (architecture §7; defaults 1). */
+  readonly wheelSpeed?: number;
+  /** Chromium-on-Windows PIXEL ÷DPR wheel correction (§7; the api detects it). */
+  readonly windowsChromium?: boolean;
   /** 1-px pane-separator fill color for screenshots (study 01 §3.7). */
   readonly separatorColor?: string;
   /** __TV_PROFILE__-only bench instrumentation (perf §9.6): the per-frame counters +
@@ -125,6 +131,7 @@ export class ChartHost implements FrameDriver {
   readonly #loop: FrameLoop;
   readonly #router = new InteractionRouter();
   readonly #machines = new Map<number, GestureMachine>(); // one per surface, keyed by paneIndex*4+kind
+  readonly #domUnsubs: Unsubscribe[] = []; // one DOM-input adapter teardown per surface (§7)
   readonly #rows: PaneRow[] = [];
   #timeAxis: SurfaceHost | null = null;
   #leftStub: SurfaceHost | null = null;
@@ -260,6 +267,8 @@ export class ChartHost implements FrameDriver {
     this.#disposed = true;
     this.#loop.dispose();
     this.#router.dispose();
+    for (const u of this.#domUnsubs) u(); // detach every surface's DOM-input listeners (§7)
+    this.#domUnsubs.length = 0;
     for (const sh of this.#allSurfaces()) sh.dispose();
     this.#rows.length = 0;
   }
@@ -336,7 +345,57 @@ export class ChartHost implements FrameDriver {
       this.#onGesture,
     );
     this.#machines.set(this.#machineKey(paneIndex, config.kind), machine);
+    // §7: attach the DOM Pointer-Events + wheel adapter that FEEDS this machine from a
+    // real browser. Coords are localized to this surface's content origin (the mount's
+    // box) so the gesture/hover/geometry path stays surface-local. Feature-detected so a
+    // headless fake mount (no addEventListener) simply gets no live input (tests call the
+    // pointerDown/Move/Up forwards directly).
+    const dom = mount as unknown as Partial<DomInputTarget>;
+    if (typeof dom.addEventListener === 'function') {
+      this.#domUnsubs.push(
+        attachDomInput(
+          dom as DomInputTarget,
+          machine,
+          (intent) => this.#onWheel(config.kind, paneIndex, intent),
+          () => {
+            const r = mount.getBoundingClientRect();
+            return { left: r.left, top: r.top };
+          },
+          {
+            wheelSpeed: this.#deps.wheelSpeed,
+            windowsChromium: this.#deps.windowsChromium,
+            getDpr: this.#deps.getDpr,
+          },
+        ),
+      );
+    }
     return sh;
+  }
+
+  // The wheel path (§7): the machine does NOT recognize wheel — the adapter normalizes
+  // it (study 10 §4.4) and the host builds the discrete 'wheel' GestureEvent here, then
+  // routes it through the SAME #onGesture sink the recognized gestures use, so the §9.1
+  // wheel behavior (zoom + scroll) claims it. `wheelDeltaX/Y` are the post-normalization
+  // scroll/zoom the behaviors read; ctrl+vertical folds into the zoom leg (§13.5).
+  #onWheel(kind: SurfaceKind, paneIndex: number, intent: WheelIntent): void {
+    const zoom = intent.ctrlKey && intent.zoom === 0 ? 0 : intent.zoom;
+    const e: GestureEvent = {
+      kind: 'wheel',
+      phase: 'fire',
+      surface: kind,
+      paneIndex,
+      x: intent.x as Coordinate,
+      y: intent.y as Coordinate,
+      startX: intent.x as Coordinate,
+      startY: intent.y as Coordinate,
+      deltaX: 0,
+      deltaY: 0,
+      wheelDeltaX: intent.scroll,
+      wheelDeltaY: zoom,
+      pointerType: 'mouse',
+      modifiers: { ctrl: intent.ctrlKey, alt: false, shift: false, meta: false },
+    };
+    this.#onGesture(e);
   }
 
   // A new suggested bitmap size → one coalescing Layout mask (§5.1.6).

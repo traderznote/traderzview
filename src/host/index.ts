@@ -30,6 +30,10 @@ export type {
 export { normalizeWheel, WHEEL_DELTA_PAGE, WHEEL_DELTA_LINE } from './input/wheel';
 export type { WheelLike, NormalizedWheel } from './input/wheel';
 
+// --- DOM Pointer-Events + capture adapter: browser → GestureMachine feed (§7) ------
+export { attachDomInput } from './input/dom-input';
+export type { DomInputTarget, ContentOrigin, WheelIntent, DomInputConfig } from './input/dom-input';
+
 // --- interaction router: priority registry + gesture dispatch (§9.1 / §13.5) -----
 export { InteractionRouter } from './input/router';
 export type {

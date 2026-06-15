@@ -49,6 +49,39 @@ function fakeEl(): HostElement {
   };
 }
 
+// A fake mount that ALSO records DOM-input listeners + capture calls, so a test can
+// dispatch synthetic PointerEvents at the host's §7 adapter (the real browser path).
+function fakeDomEl(): HostElement & {
+  dispatch(type: string, e: unknown): void;
+  hasListener(type: string): boolean;
+  captured: number[];
+} {
+  const listeners = new Map<string, (e: never) => void>();
+  const captured: number[] = [];
+  return {
+    style: { position: '', left: '', top: '', width: '', height: '' },
+    appendChild: vi.fn(),
+    removeChild: vi.fn(),
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 0, height: 0 }),
+    addEventListener(type: string, listener: (e: never) => void) {
+      listeners.set(type, listener);
+    },
+    removeEventListener(type: string) {
+      listeners.delete(type);
+    },
+    setPointerCapture(id: number) {
+      captured.push(id);
+    },
+    releasePointerCapture() {},
+    dispatch(type: string, e: unknown) {
+      const l = listeners.get(type);
+      if (l !== undefined) (l as (e: unknown) => void)(e);
+    },
+    hasListener: (type: string) => listeners.has(type),
+    captured,
+  } as HostElement & { dispatch(type: string, e: unknown): void; hasListener(type: string): boolean; captured: number[] };
+}
+
 // --- a recording backend: each surface logs its begin/render/end calls -------------
 function fakeBackend() {
   const log: string[] = [];
@@ -233,6 +266,73 @@ describe('ChartHost — default behaviors are priority-0 router registrations (�
     host.pointerDown(0, 'pane', t(12));
     host.pointerUp(0, 'pane', tu(12));
     expect(reset).toHaveBeenCalled(); // the priority-10 tool got first crack
+  });
+});
+
+describe('ChartHost — DOM Pointer-Events adapter feeds the gesture machine (architecture §7)', () => {
+  // A build whose surface mounts support DOM listeners, so synthetic PointerEvents
+  // dispatched at a mount flow through the §7 adapter → the surface's GestureMachine.
+  function buildDom() {
+    const raf = fakeRaf();
+    const scheduler = createRafScheduler(raf);
+    const { backend } = fakeBackend();
+    const hooks = fakeHooks(1, { left: 0, right: 50 }, 28);
+    const mounts: ReturnType<typeof fakeDomEl>[] = [];
+    let now = 0;
+    const elements: ElementFactory = {
+      root: fakeEl,
+      surfaceMount: () => {
+        const m = fakeDomEl();
+        mounts.push(m);
+        return m;
+      },
+      separator: fakeEl,
+    };
+    const model = new ChartModel({ behavior: timeBehavior(), invalidate: () => {} });
+    const deps: ChartHostDeps = {
+      model, backend, elements, scheduler, hooks,
+      clock: () => now, getDpr: () => 1, separatorColor: '#e0e3eb',
+    };
+    const host = new ChartHost(deps);
+    // The FIRST surface mount created is the pane (paneIndex 0) — see #buildRow order.
+    return { host, hooks, mounts, paneMount: mounts[0]!, setNow: (t: number) => { now = t; } };
+  }
+
+  test('a synthetic pointerdown→move→up on the pane mount drives a pan through the router', () => {
+    const { host, hooks, paneMount } = buildDom();
+    host.setSize({ width: 400, height: 300 });
+    expect(paneMount.hasListener('pointerdown')).toBe(true);
+    const p = (x: number, buttons: number) => ({
+      pointerId: 3, clientX: x, clientY: 50, buttons, pointerType: 'mouse',
+      ctrlKey: false, altKey: false, shiftKey: false, metaKey: false,
+    });
+    paneMount.dispatch('pointerdown', p(10, 1));
+    expect(paneMount.captured).toContain(3); // setPointerCapture was called (§7)
+    paneMount.dispatch('pointermove', p(40, 1)); // past the 5px slop ⇒ drag start → clearHover
+    paneMount.dispatch('pointermove', p(70, 1)); // drag move → pan
+    paneMount.dispatch('pointerup', { ...p(70, 0) });
+    expect(hooks.calls.clearHover).toBeGreaterThanOrEqual(1);
+    expect(hooks.calls.pan).toBeGreaterThanOrEqual(1);
+  });
+
+  test('a synthetic wheel on the pane mount drives a zoom through the router', () => {
+    const { host, hooks, paneMount } = buildDom();
+    host.setSize({ width: 400, height: 300 });
+    let prevented = false;
+    paneMount.dispatch('wheel', {
+      deltaMode: 0, deltaX: 0, deltaY: 120, clientX: 100, clientY: 60,
+      ctrlKey: false, preventDefault: () => { prevented = true; },
+    });
+    expect(prevented).toBe(true); // §7: the page must not scroll under the chart
+    expect(hooks.calls.zoom).toBeGreaterThanOrEqual(1);
+  });
+
+  test('dispose detaches the DOM listeners', () => {
+    const { host, paneMount } = buildDom();
+    host.setSize({ width: 400, height: 300 });
+    expect(paneMount.hasListener('wheel')).toBe(true);
+    host.dispose();
+    expect(paneMount.hasListener('wheel')).toBe(false);
   });
 });
 

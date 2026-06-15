@@ -19,6 +19,10 @@ import {
   UpdateLevel,
   buildHorzGeometry,
   buildPriceConverter,
+  clampBarSpacing,
+  clampRightOffset,
+  rightOffsetForPixels,
+  fitContentWithPixels,
 } from '../model';
 import type { HorzGeometry, Pane, ChartOptions, IPrimitive as ModelIPrimitive } from '../model';
 import { ChartHost, createRafScheduler } from '../host';
@@ -72,6 +76,24 @@ export interface ChartEnvironment {
 
 interface ItemWithTime {
   time: unknown;
+}
+
+/** The chart's LIVE time-scale navigation state (Part B). One cell shared by the series
+ *  rebuild, the time-scale handle geometry, and the host pan/zoom/reset/fit hooks. The
+ *  mutators delegate their scroll/scale MATH to the model time-scale navigator's pure
+ *  functions — api owns the state cell, the model owns the arithmetic (§11 boundary). */
+interface LiveNav {
+  barSpacing(): number;
+  rightOffset(): number;
+  /** Pan by a media-px horizontal delta: ΔR = −dx/S, then clamp R (study 03 §4.6). */
+  pan(deltaXpx: number): void;
+  /** Zoom by a ±step around media x: scale S (clamped), re-pin the logical position
+   *  under `atX` by adjusting R (anchor pinning, study 03 §4.8). */
+  zoom(step: number, atX: number): void;
+  /** Fit all bars into the pane width: S = W/N, R = 0 (fitContentWithPixels, px=0). */
+  fit(): void;
+  /** Reset to the option defaults (barSpacing/rightOffset), then fit (double-click §10). */
+  reset(): void;
 }
 
 /** One fully wired series: model Series ↔ PlotStore ↔ shared Timeline ↔ SeriesKind
@@ -221,13 +243,21 @@ export function createChartWith<H = Time>(
     width: opts.width > 0 ? opts.width : Math.max(0, Math.round(rect.width)),
     height: opts.height > 0 ? opts.height : Math.max(0, Math.round(rect.height)),
   };
-  const liveBarSpacing = (): number =>
-    (model.options() as { timeScale?: { barSpacing?: number } }).timeScale?.barSpacing ?? 6;
+  // --- LIVE time-scale navigation state (Part B) -------------------------------------
+  // The chart's ONE live { barSpacing, rightOffset } cell that the geometry (series
+  // rebuild + the time-scale handle) reads, and the host pan/zoom/reset/fit hooks drive.
+  // The model has no live nav-state slot (options() is a snapshot; queueHorzCommand fires
+  // masks nothing resolves), so the cell lives here — but ALL scroll/scale math is the
+  // model navigator's pure functions (clampBarSpacing/clampRightOffset/rightOffsetForPixels/
+  // fitContentWithPixels), so no nav math is reinvented in api (the §11 boundary).
+  const navPaneWidth = (): number => Math.max(0, size.width - RIGHT_AXIS_WIDTH);
+  const nav = createLiveNav(model, () => timeline.slotCount, navPaneWidth);
+  const liveBarSpacing = (): number => nav.barSpacing();
 
   // Build the host (M8) over the injected backend; it composites each pane's PaneScene
   // → backend.renderLayer per the §6 call sequence. `markInput` (profile-only) tags the
   // input→paint lag at the gesture/hover hooks (perf §4.4.9).
-  host = buildHost<H>(backend, element, model, sceneFor, env?.scheduler, profiler, markInput);
+  host = buildHost<H>(backend, element, model, sceneFor, nav, env?.scheduler, profiler, markInput);
   host.setSize(size); // one synchronous Layout flush → the first paint
 
   // The chart facade handle, assigned at the end (before any user attach call can run) so
@@ -313,6 +343,8 @@ export function createChartWith<H = Time>(
         binder,
         ctxFor,
         placementFor,
+        nav,
+        navPaneWidth,
       );
       wired.set(w.model, w);
       pane.addSeries(w.paneSeries);
@@ -337,13 +369,13 @@ export function createChartWith<H = Time>(
     },
     createPane: (pane) => paneHandle(pane),
     createTimeScale: () =>
-      // FIX 6: the pane width the geometry uses — the chart's width minus the right price-axis
-      // the measure hook reserves (RIGHT_AXIS_WIDTH). This reconstructs the host layout's
-      // paneWidth for the default single right-axis case; the host's exact live paneWidth is
-      // not exposed through this seam (see makeTimeScaleHandle's note).
-      makeTimeScaleHandle<H>(model, behavior, disposed, liveBarSpacing, timeline, () =>
-        Math.max(0, size.width - RIGHT_AXIS_WIDTH),
-      ),
+      // FIX 6 + Part B: the pane width the geometry uses — the chart's width minus the right
+      // price-axis the measure hook reserves (RIGHT_AXIS_WIDTH). This reconstructs the host
+      // layout's paneWidth for the default single right-axis case; the host's exact live
+      // paneWidth is not exposed through this seam (see makeTimeScaleHandle's note). The
+      // handle now reads the LIVE nav cell (barSpacing/rightOffset) and its fitContent/reset
+      // drive nav.fit()/nav.reset() so a programmatic fitContent() actually fits.
+      makeTimeScaleHandle<H>(model, behavior, disposed, nav, timeline, navPaneWidth),
     createPriceScale: (pane, scaleId) => priceScaleHandle(pane, scaleId),
     setCrosshairPosition: (price, horzItem, series) => {
       model.invalidate(UpdateLevel.Overlay);
@@ -525,6 +557,8 @@ function wireSeries<H>(
   binder: ReturnType<typeof createPrimitiveBinder<H>>,
   ctxFor: (pane: Pane, series?: ISeries<SeriesType, H>) => PrimitiveContext<H>,
   placementFor: (pane: Pane, scaleId: string | null) => OwnerPlacement,
+  nav: LiveNav,
+  navPaneWidth: () => number,
 ): Wired<H> {
   const merged = createSeriesOptions(
     definition.defaultOptions as Record<string, unknown>,
@@ -565,10 +599,13 @@ function wireSeries<H>(
       return;
     }
     const win = itemWindow(0, store.length);
+    // LIVE geometry (Part B): width is the host's live pane width (preferred) else the
+    // navPaneWidth reconstruction; barSpacing/rightOffset are the live nav cell driven by
+    // the pan/zoom/reset/fit hooks; baseIndex is the newest slot. Was hardcoded 6/0.
     const horz = buildHorzGeometry({
-      width: frame.frame.mediaSize.width || size.width || 100,
-      barSpacing: 6,
-      rightOffset: 0,
+      width: frame.frame.mediaSize.width || navPaneWidth() || size.width || 100,
+      barSpacing: nav.barSpacing(),
+      rightOffset: nav.rightOffset(),
       baseIndex: store.length - 1,
     });
     const price = priceConverterFor(store, frame.frame.mediaSize.height || size.height || 100);
@@ -860,24 +897,24 @@ function makeTimeScaleHandle<H>(
   model: ChartModel<H>,
   behavior: IHorzScaleBehavior<H>,
   disposed: DisposedCell,
-  barSpacing: () => number,
+  nav: LiveNav,
   timeline: Timeline<ItemWithTime, H, unknown>,
   paneWidth: () => number,
 ): ITimeScale<H> {
-  // FIX 6: wire the real conversions over the shared `timeline` (key↔logical/keysInRange/
-  // nearest-slot — all PUBLIC) and a chart-level HorzGeometry built ON DEMAND. The geometry's
-  // four params mirror what the series renders with (wireSeries.rebuild): barSpacing/rightOffset
-  // from the live model options, baseIndex = the newest slot. NOTE the pane WIDTH is an
-  // approximation — the exact value comes from the host layout (computeLayout's paneWidth =
-  // requested.width − leftAxis − rightAxis); we reconstruct it as paneWidth() (the chart's
-  // initial width − RIGHT_AXIS_WIDTH) because the host does not expose its live paneWidth
-  // through this seam. For the default single right-axis layout this equals the host value.
-  const rightOffsetOf = (): number =>
-    (model.options() as { timeScale?: { rightOffset?: number } }).timeScale?.rightOffset ?? 0;
+  // FIX 6 + Part B: wire the real conversions over the shared `timeline` (key↔logical/
+  // keysInRange/nearest-slot — all PUBLIC) and a chart-level HorzGeometry built ON DEMAND.
+  // The geometry's four params mirror what the series renders with (wireSeries.rebuild):
+  // barSpacing/rightOffset now from the LIVE nav cell (driven by pan/zoom/reset/fit), so
+  // timeScale().coordinateToLogical(x) tracks the user's panning/zooming. NOTE the pane
+  // WIDTH is an approximation — the exact value comes from the host layout (computeLayout's
+  // paneWidth = requested.width − leftAxis − rightAxis); we reconstruct it as paneWidth()
+  // (the chart's width − RIGHT_AXIS_WIDTH) because the host does not expose its live
+  // paneWidth through this seam. For the default single right-axis layout this equals it.
+  const rightOffsetOf = (): number => nav.rightOffset();
   const geom = (): HorzGeometry =>
     buildHorzGeometry({
       width: paneWidth(),
-      barSpacing: barSpacing(),
+      barSpacing: nav.barSpacing(),
       rightOffset: rightOffsetOf(),
       baseIndex: timeline.slotCount - 1,
     });
@@ -892,8 +929,17 @@ function makeTimeScaleHandle<H>(
       scrollPosition: () => rightOffsetOf(),
       scrollToPosition: () => {},
       scrollToRealTime: () => {},
-      fitContent: () => model.invalidate(UpdateLevel.Render),
-      reset: () => model.invalidate(UpdateLevel.Render),
+      // Part B: fitContent fits all bars (S = W/N, R = 0) then repaints; reset restores the
+      // option defaults + re-fits. Both drive the LIVE nav cell, so the next frame paints
+      // the fitted geometry (the handle's getVisibleLogicalRange then reflects it too).
+      fitContent: () => {
+        nav.fit();
+        model.invalidate(UpdateLevel.Render);
+      },
+      reset: () => {
+        nav.reset();
+        model.invalidate(UpdateLevel.Render);
+      },
       // Logical-range get/set: the model time-scale navigator is not exposed through this
       // seam yet, so we READ a sensible [0, last] from the geometry's visible range and the
       // SETTER is a no-op pending the navigator (note for the future seam).
@@ -927,7 +973,7 @@ function makeTimeScaleHandle<H>(
           from: range.from as unknown as Logical,
           to: range.to as unknown as Logical,
         }) as unknown as readonly HorzKey[],
-      barSpacing,
+      barSpacing: () => nav.barSpacing(),
       rightOffset: rightOffsetOf,
       width: paneWidth,
       height: () => 0,
@@ -942,6 +988,150 @@ function makeTimeScaleHandle<H>(
   });
 }
 
+// --- LIVE time-scale nav: the api state cell + the model-navigator math (Part B) ----
+
+/**
+ * Build the chart's one LIVE { barSpacing, rightOffset } cell (Part B). The state lives
+ * here (the model has no live nav slot), but EVERY scroll/scale computation delegates to
+ * the model time-scale navigator's pure functions — `clampBarSpacing` / `clampRightOffset`
+ * (study 03 §4.5/§4.6), `rightOffsetForPixels` (§5.3.4 zoom-anchor px-gap), and
+ * `fitContentWithPixels` (§5.3.4 fit) — so no nav arithmetic is reinvented in api.
+ *
+ *   barCount() = the union timeline's slot count N (baseIndex B = N − 1)
+ *   paneWidth() = the host's pane width W (chart width − right axis)
+ *
+ * The clamp params read minBarSpacing/maxBarSpacing + fixLeftEdge/fixRightEdge from the
+ * live timeScale options (the §6.5 group), so user option changes bound the gestures.
+ *
+ * Exported (not re-exported from the api barrel — see api/index.ts) so the Part B nav
+ * unit tests can drive pan/zoom/reset/fit math directly against a real ChartModel.
+ */
+export function createLiveNav<H>(
+  model: ChartModel<H>,
+  barCount: () => number,
+  paneWidth: () => number,
+): LiveNav {
+  const ts = (): {
+    barSpacing?: number;
+    rightOffset?: number;
+    minBarSpacing?: number;
+    maxBarSpacing?: number;
+    fixLeftEdge?: boolean;
+    fixRightEdge?: boolean;
+  } => (model.options() as { timeScale?: Record<string, unknown> }).timeScale ?? {};
+
+  // Initialize from the option defaults; mutated by the hooks thereafter.
+  let barSpacing = ts().barSpacing ?? 6;
+  let rightOffset = ts().rightOffset ?? 0;
+
+  const spacingClamp = (): {
+    width: number;
+    minBarSpacing: number;
+    maxBarSpacing: number;
+    barCount: number;
+    fixLeftEdge: boolean;
+    fixRightEdge: boolean;
+  } => {
+    const o = ts();
+    return {
+      width: paneWidth() || 100,
+      minBarSpacing: o.minBarSpacing ?? 0.5,
+      maxBarSpacing: o.maxBarSpacing ?? 0,
+      barCount: barCount(),
+      fixLeftEdge: o.fixLeftEdge ?? false,
+      fixRightEdge: o.fixRightEdge ?? false,
+    };
+  };
+  const offsetClamp = (): {
+    width: number;
+    barSpacing: number;
+    firstIndex: number;
+    baseIndex: number | null;
+    barCount: number;
+    fixLeftEdge: boolean;
+    fixRightEdge: boolean;
+  } => {
+    const o = ts();
+    const n = barCount();
+    return {
+      width: paneWidth() || 100,
+      barSpacing,
+      firstIndex: 0,
+      baseIndex: n > 0 ? n - 1 : null,
+      barCount: n,
+      fixLeftEdge: o.fixLeftEdge ?? false,
+      fixRightEdge: o.fixRightEdge ?? false,
+    };
+  };
+
+  return {
+    barSpacing: () => barSpacing,
+    rightOffset: () => rightOffset,
+    pan: (dx) => {
+      // Dragging content right (positive dx) reveals history: from the geometry
+      // x = W − (B + R − ix + 0.5)·S − 1, Δx = −ΔR·S, so ΔR = −dx/S. Then clamp R.
+      if (!(barSpacing > 0)) return;
+      rightOffset = clampRightOffset(rightOffset - dx / barSpacing, offsetClamp());
+    },
+    zoom: (step, atX) => {
+      // Scale S around the cursor: grow/shrink by the ±step, clamp S, then re-pin the
+      // logical position under atX by the navigator's px-gap rule (rightOffsetForPixels
+      // keeps the right-edge pixel gap constant — the reference's zoom-anchor math).
+      const oldS = barSpacing;
+      if (!(oldS > 0)) return;
+      const target = oldS * (1 + step * 0.1); // 10% per ±1 wheel notch (study 03 §4.8 feel)
+      const newS = clampBarSpacing(target, spacingClamp());
+      if (newS === oldS) return;
+      barSpacing = newS;
+      rightOffset = clampRightOffset(rightOffsetForPixels(rightOffset, oldS, newS), offsetClamp());
+      void atX; // anchor px (the px-gap rule pins the right edge; full cursor-pin is a follow-up)
+    },
+    fit: () => {
+      const n = barCount();
+      if (n <= 0) return;
+      const fit = fitContentWithPixels(paneWidth() || 100, 0, n); // px=0 ⇒ S = W/N, R = 0
+      barSpacing = clampBarSpacing(fit.barSpacing, spacingClamp());
+      rightOffset = clampRightOffset(fit.rightOffset, offsetClamp());
+    },
+    reset: () => {
+      barSpacing = ts().barSpacing ?? 6;
+      rightOffset = ts().rightOffset ?? 0;
+      // Double-click reset re-fits all bars into view (architecture §10).
+      const n = barCount();
+      if (n > 0) {
+        const fit = fitContentWithPixels(paneWidth() || 100, 0, n);
+        barSpacing = clampBarSpacing(fit.barSpacing, spacingClamp());
+        rightOffset = clampRightOffset(fit.rightOffset, offsetClamp());
+      }
+    },
+  };
+}
+
+/** Drive a pane's price-scale navigator from a price-axis drag (Part B). The behavior
+ *  sends an incremental media-px `deltaY` per move; we frame a one-shot start→scaleTo→end
+ *  against the navigator's band so the navigator's §4.8 damped-scale math runs and pins
+ *  the range. NOTE (partial): the visible price-axis effect is bounded by the M12-deferred
+ *  autoscale→navigator-range wiring — the api's per-frame PriceConverter (priceConverterFor)
+ *  still derives its own data range, so a chart whose navigator range is unset (the default)
+ *  sees the navigator updated but not yet reflected in the paint. The seam is driven here so
+ *  it cannot rot; closing the visual gap is the real price-scale autoscale path. */
+function drivePriceAxisDrag<H>(
+  model: ChartModel<H>,
+  paneIndex: number,
+  deltaYpx: number,
+  axis: 'left' | 'right',
+): void {
+  const pane = model.panes().panes()[paneIndex];
+  const scale = pane?.priceScale(axis) ?? null;
+  if (scale === null) return;
+  const navp = scale.navigator();
+  // A drag delta has no absolute anchor; frame a unit gesture: start at 0, scaleTo the
+  // delta, end. The navigator pins autoScale off + applies the damped scale (study 04 §4.8).
+  navp.startScale(0);
+  navp.scaleTo(deltaYpx);
+  navp.endScale();
+}
+
 // --- building the host (M8) over the injected backend ------------------------------
 
 function buildHost<H>(
@@ -949,6 +1139,7 @@ function buildHost<H>(
   element: HTMLElement,
   model: ChartModel<H>,
   sceneFor: (pane: Pane) => PaneScene,
+  nav: LiveNav,
   schedulerOverride?: IFrameScheduler,
   profiler?: FrameProfiler,
   markInput: () => void = () => {},
@@ -988,12 +1179,30 @@ function buildHost<H>(
     animationRearmLevel: () => UpdateLevel.None,
     applyHover: () => false,
     clearHover: () => false,
-    // Each gesture intent marks the input→paint lag (profile-only, perf §4.4.9) before
-    // arming the Render frame the lag is measured against.
-    pan: () => (markInput(), model.invalidate(UpdateLevel.Render)),
-    zoom: () => (markInput(), model.invalidate(UpdateLevel.Render)),
-    resetPane: () => (markInput(), model.invalidate(UpdateLevel.Render)),
-    priceAxisDrag: () => (markInput(), model.invalidate(UpdateLevel.Render)),
+    // Part B: the input ports now MOVE the chart. Each mutates the live nav cell (the math
+    // is the model navigator's, called inside nav.*) or the pane's price-scale navigator,
+    // then arms a Render frame so the series rebuild + axes repaint with the new geometry.
+    // markInput() tags the input→paint lag first (profile-only, perf §4.4.9).
+    pan: (dx) => {
+      markInput();
+      nav.pan(dx);
+      model.invalidate(UpdateLevel.Render);
+    },
+    zoom: (step, atX) => {
+      markInput();
+      nav.zoom(step, atX);
+      model.invalidate(UpdateLevel.Render);
+    },
+    resetPane: () => {
+      markInput();
+      nav.reset();
+      model.invalidate(UpdateLevel.Render);
+    },
+    priceAxisDrag: (paneIndex, dy, axis) => {
+      markInput();
+      drivePriceAxisDrag(model, paneIndex, dy, axis);
+      model.invalidate(UpdateLevel.Render);
+    },
   };
 
   return new ChartHost({
