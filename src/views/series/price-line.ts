@@ -6,7 +6,7 @@
 // text are fed each frame by `provider` (the model walk stays out of views, §3.1); the
 // source only crisps + caches (perf §4.4.2: clean → byte-identical array; change → re-emit).
 import type { Coordinate } from '../../core';
-import { crispStrokePos, crispWidth, DisplayListBuilder, HitPriority, LineStyle, ZBand } from '../../gfx';
+import { crispRound, crispStrokePos, crispWidth, DisplayListBuilder, HitPriority, LineStyle, ZBand } from '../../gfx';
 import type { DisplayList, HitCandidate, SceneSource, ViewFrame } from '../../gfx';
 import type { AxisLabel } from '../../model';
 
@@ -80,9 +80,14 @@ export function createPriceLineSource(
   // The resolved fill: option color when non-empty, else the last-bar color (§4.13).
   const fillOf = (s: PriceLineState): string => (o.color !== '' ? o.color : s.barColor);
   // Drawable iff visible, has a finite y, and that y is on-pane in device space.
+  // The off-pane gate compares the CRISP-ROUNDED device y (`round(data.y·vpr)`, the
+  // exact value the renderer would draw at), NOT the raw product, so it matches the
+  // §4.13 renderer threshold verbatim — `if y < 0 or y > bitmapHeight → skip`. This
+  // means a y whose raw ·vr lands in (−0.5, 0) or (bh, bh+0.5] rounds onto the pane
+  // edge and DOES draw (study 06 §4.13 / design 03 §8.5.8).
   function drawable(s: PriceLineState, vr: number, bh: number): boolean {
     if (!o.visible || s.y === null || !Number.isFinite(s.y)) return false;
-    const yDev = s.y * vr;
+    const yDev = crispRound(s.y, vr);
     return yDev >= 0 && yDev <= bh;
   }
 

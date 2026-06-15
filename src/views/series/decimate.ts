@@ -97,7 +97,9 @@ export function decimateColumns(
   const poly = lineLike ? out.polyline(opts.lineWidth ?? 1, LineStyle.Solid, 'miter') : null;
   const rects = lineLike ? null : out.rects({});
 
-  // Column accumulator (no per-column objects — three locals).
+  // Column accumulator (no per-column objects — three locals). `curCol` starts below
+  // the first valid on-screen column index so the very first finite row always opens
+  // a fresh column; -1 also doubles as the "no column open yet" sentinel for flush.
   let curCol = -1;
   let colMin = Number.POSITIVE_INFINITY; // smallest price in the column
   let colMax = Number.NEGATIVE_INFINITY; // largest price in the column
@@ -112,8 +114,16 @@ export function decimateColumns(
     // Row → device-pixel column (media-px X · hr, floored to the pixel grid).
     const xMedia = horz.indexToCoordinate(store.timeIndex(i) as number);
     const col = Math.floor(xMedia * hr);
+    // Clip to the on-screen device grid [0, deviceWidth). The engine passes the
+    // EXTENDED window (± neighbours, study 10 §4.11), so rows can map left of x=0 or
+    // past the right edge; those columns are off-screen and must NOT be emitted, so
+    // the per-column count stays EXACTLY "one segment per on-screen device column"
+    // and `columns ≤ deviceWidth` holds by construction (perf §6.3 caps §4.2). A
+    // clipped row still advances `curCol` (so a following on-screen row in a new
+    // column flushes correctly), but `emitColumn` is gated on the on-screen test.
     if (col !== curCol) {
-      if (curCol >= 0 && emitColumn(poly, rects, opts, price, vr, curCol, colMin, colMax)) columns++;
+      if (curCol >= 0 && curCol < deviceWidth && emitColumn(poly, rects, opts, price, vr, curCol, colMin, colMax))
+        columns++;
       curCol = col;
       colMin = lo;
       colMax = hi;
@@ -122,7 +132,8 @@ export function decimateColumns(
       if (hi > colMax) colMax = hi;
     }
   }
-  if (curCol >= 0 && emitColumn(poly, rects, opts, price, vr, curCol, colMin, colMax)) columns++;
+  if (curCol >= 0 && curCol < deviceWidth && emitColumn(poly, rects, opts, price, vr, curCol, colMin, colMax))
+    columns++;
 
   if (__DEV__) assert(columns <= deviceWidth, 'decimation emitted more columns than device pixels');
   return { columns, rowsScanned };

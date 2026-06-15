@@ -108,8 +108,9 @@ export interface IChart<H = unknown> {
 export interface ChartHostFacade {
   /** Apply a requested outer size (resize → synchronous forced layout flush, §7). */
   setSize(size: { width: number; height: number }): void;
-  /** Flush pending invalidations, then composite a screenshot (§7). */
-  takeScreenshot(): Snapshot;
+  /** Flush pending invalidations, then composite a screenshot (§7). `includeCrosshair`
+   *  (default true) toggles the overlay (crosshair) layer in the composite (§8.6). */
+  takeScreenshot(includeCrosshair?: boolean): Snapshot;
   /** The interaction router (chart.input(), §13.5). */
   input(): IInteractionRouter;
   /** Tear down surfaces, frame loop, router (chart.dispose path). */
@@ -405,11 +406,11 @@ export function createChartApi<H = unknown>(deps: ChartApiDeps<H>): IChart<H> {
     },
 
     // --- output -------------------------------------------------------------------
-    takeScreenshot(_options): Snapshot {
+    takeScreenshot(options): Snapshot {
       guard();
-      // The host flushes pending invalidations first (§7). includeCrosshair is wired
-      // by create-chart's compositor; the chart forwards the request unchanged.
-      return host.takeScreenshot();
+      // The host flushes pending invalidations first (§7), then composites. A false
+      // includeCrosshair omits the overlay layer (§8.6); default true keeps it.
+      return host.takeScreenshot(options?.includeCrosshair ?? true);
     },
 
     // --- events (§14) -------------------------------------------------------------

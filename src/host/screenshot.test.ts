@@ -14,10 +14,10 @@ function fakeSurface(rect: Rect, visible: boolean, tag: string): SurfaceHost {
 }
 
 function recordingComposer() {
-  const seen: { tiles: SnapshotTile[]; size: Size }[] = [];
+  const seen: { tiles: SnapshotTile[]; size: Size; includeCrosshair?: boolean }[] = [];
   const composer: SnapshotComposer = {
-    composeSnapshot(tiles, mediaSize): Snapshot {
-      seen.push({ tiles: [...tiles], size: mediaSize });
+    composeSnapshot(tiles, mediaSize, includeCrosshair): Snapshot {
+      seen.push({ tiles: [...tiles], size: mediaSize, includeCrosshair });
       return { _tag: 'Snapshot' };
     },
   };
@@ -53,5 +53,21 @@ describe('captureScreenshot — single-pass tile collection (architecture §7)',
     const { composer, seen } = recordingComposer();
     captureScreenshot(composer, [], [], '#000', { width: 10, height: 10 });
     expect(seen[0]!.tiles).toEqual([]);
+  });
+
+  test('includeCrosshair defaults to true and is forwarded to the compositor', () => {
+    const { composer, seen } = recordingComposer();
+    captureScreenshot(composer, [], [], '#000', { width: 10, height: 10 });
+    expect(seen[0]!.includeCrosshair).toBe(true);
+  });
+
+  test('includeCrosshair=false is forwarded so the backend composes base-only (§5.2/§8.6)', () => {
+    const { composer, seen } = recordingComposer();
+    const surfaces = [fakeSurface({ x: 0, y: 0, width: 100, height: 50 }, true, 'pane0')];
+    captureScreenshot(composer, surfaces, [], '#000', { width: 100, height: 50 }, false);
+    expect(seen[0]!.includeCrosshair).toBe(false);
+    // tiles are unchanged by the toggle — the omission happens in the compositor, not here.
+    expect(seen[0]!.tiles).toHaveLength(1);
+    expect('snapshot' in seen[0]!.tiles[0]!).toBe(true);
   });
 });

@@ -1,6 +1,15 @@
 import { describe, expect, test } from 'vitest';
 import { createPriceGeometry } from './geometry';
-import { PriceScaleMode, toLog, fromLog, defaultLogFormula } from './modes';
+import {
+  PriceScaleMode,
+  toLog,
+  fromLog,
+  defaultLogFormula,
+  toPercent,
+  fromPercent,
+  toIndexed,
+  fromIndexed,
+} from './modes';
 
 // study 04 §4 (margins, h = H − topMarginPx − bottomMarginPx, the −1 fenceposts,
 // the conversions) + architecture §4.6 "Margins adopt the unified form" are the
@@ -153,5 +162,84 @@ describe('PriceGeometry — empty scale (study 04 §5)', () => {
     const g = createPriceGeometry({ ...BASE, range: { min: Number.NaN, max: 10 } });
     expect(g.isEmpty).toBe(true);
     expect(g.logicalToCoordinate(5)).toBe(0);
+  });
+});
+
+// --- M11: percent/indexed geometry maps linearly; range is already logical ---------
+// In Percentage / IndexedTo100 the stored range is ALREADY the mode transform of
+// price, so the geometry is a plain linear map (study 04 §4.4 — no log branch). The
+// price⇄coord public entry composes the mode transform OUTSIDE the geometry; these
+// tests pin both halves so the composition is exact for either sign of base.
+describe('PriceGeometry — percent/indexed map linearly (study 04 §4.4)', () => {
+  // percent logical range for base 100, prices spanning [90, 110] → [-10, +10]
+  const PCT = {
+    ...BASE,
+    range: { min: toPercent(90, 100), max: toPercent(110, 100) },
+    mode: PriceScaleMode.Percentage,
+  };
+
+  test('percent/indexed geometry does NOT apply a log transform', () => {
+    const g = createPriceGeometry(PCT);
+    const linear = createPriceGeometry({ ...PCT, mode: PriceScaleMode.Normal });
+    // identical output: percent mode is linear in the geometry (no toLog)
+    expect(g.logicalToCoordinate(5)).toBeCloseTo(linear.logicalToCoordinate(5), 12);
+  });
+
+  test('geometry round-trips a percent logical value exactly', () => {
+    const g = createPriceGeometry(PCT);
+    for (const l of [-10, -3.5, 0, 7.25, 10]) {
+      expect(g.coordinateToLogical(g.logicalToCoordinate(l))).toBeCloseTo(l, 6);
+    }
+  });
+});
+
+// --- M11: NEGATIVE-BASE no visual jump end-to-end (architecture §13.10 FIX) ---------
+// The full public path for percent/indexed is fromMode(coordinateToLogical(
+// logicalToCoordinate(toMode(price, base)))). With the §13.10 true-inverse pair the
+// whole composition is the identity for EITHER sign of base — so switching into/out
+// of indexed mode at a negative base produces NO visual jump.
+describe('PriceGeometry — negative-base price⇄coord composes to identity (§13.10 FIX)', () => {
+  test('indexed mode: price → coord → price is identity for a NEGATIVE base', () => {
+    const base = -100;
+    // logical range = indexed transform of raw prices [-110, -90] about base -100
+    const range = { min: toIndexed(-110, base), max: toIndexed(-90, base) };
+    const g = createPriceGeometry({ ...BASE, range, mode: PriceScaleMode.IndexedTo100 });
+    for (const price of [-110, -100, -97.5, -92.25, -90]) {
+      const coord = g.logicalToCoordinate(toIndexed(price, base));
+      const back = fromIndexed(g.coordinateToLogical(coord), base);
+      expect(back).toBeCloseTo(price, 6);
+    }
+  });
+
+  test('indexed mode: same path for a POSITIVE base (parity with the positive case)', () => {
+    const base = 100;
+    const range = { min: toIndexed(90, base), max: toIndexed(110, base) };
+    const g = createPriceGeometry({ ...BASE, range, mode: PriceScaleMode.IndexedTo100 });
+    for (const price of [90, 100, 102.5, 110]) {
+      const coord = g.logicalToCoordinate(toIndexed(price, base));
+      const back = fromIndexed(g.coordinateToLogical(coord), base);
+      expect(back).toBeCloseTo(price, 6);
+    }
+  });
+
+  test('percentage mode: negative-base price → coord → price is identity (no jump)', () => {
+    const base = -100;
+    const range = { min: toPercent(-110, base), max: toPercent(-90, base) };
+    const g = createPriceGeometry({ ...BASE, range, mode: PriceScaleMode.Percentage });
+    for (const price of [-110, -100, -95.5, -90]) {
+      const coord = g.logicalToCoordinate(toPercent(price, base));
+      const back = fromPercent(g.coordinateToLogical(coord), base);
+      expect(back).toBeCloseTo(price, 6);
+    }
+  });
+
+  test('negative-base indexed does NOT drift by 2·base through the full path', () => {
+    const base = -100;
+    const price = -90;
+    const range = { min: toIndexed(-110, base), max: toIndexed(-80, base) };
+    const g = createPriceGeometry({ ...BASE, range, mode: PriceScaleMode.IndexedTo100 });
+    const back = fromIndexed(g.coordinateToLogical(g.logicalToCoordinate(toIndexed(price, base))), base);
+    expect(back).toBeCloseTo(price, 6);
+    expect(back).not.toBeCloseTo(price + 2 * base, 4); // the reference's -290 defect
   });
 });

@@ -214,6 +214,11 @@ class AreaKind implements SeriesKind<AreaItem> {
     // Base level the polygon closes to: top edge (0) when inverted, else pane height
     // (study 06 §4.6 `baseLevelCoordinate ?? (invertFilledArea ? 0 : mediaHeight)`).
     const baseY = o.invertFilledArea ? 0 : mediaSize.height;
+    // Gradient BOTTOM coordinate is ALWAYS the pane height (study 06 §4.6: the fill
+    // gradient spans `topCoordinate → bitmapHeight`), INDEPENDENT of `baseLevelCoordinate`
+    // / `invertFilledArea`. Only the polygon close uses `baseY`; an inverted area (baseY=0)
+    // must NOT collapse the gradient to a degenerate [topY, 0] span. List space (media px).
+    const gradBottom = mediaSize.height;
 
     // --- LIST 1: media-space area fill ---------------------------------------
     out.beginList('media');
@@ -222,13 +227,13 @@ class AreaKind implements SeriesKind<AreaItem> {
       const yi = y[i]!;
       if (!Number.isNaN(yi)) {
         const half = this.#barSpacing / 2;
-        const fill = this.#fillStyle(this.#topColors[i] ?? o.topColor, this.#bottomColors[i] ?? o.bottomColor, topY, baseY);
+        const fill = this.#fillStyle(this.#topColors[i] ?? o.topColor, this.#bottomColors[i] ?? o.bottomColor, topY, gradBottom);
         const w = out.area(baseY, fill);
         w.vertex(x[i]! - half, yi);
         w.vertex(x[i]! + half, yi);
       }
     } else {
-      this.#emitFill(x, y, from, to, topY, baseY, out);
+      this.#emitFill(x, y, from, to, topY, baseY, gradBottom, out);
     }
 
     // --- LIST 2: bitmap-space top line (study 06 §4.5) — shared Simple walk ---
@@ -253,6 +258,7 @@ class AreaKind implements SeriesKind<AreaItem> {
     to: number,
     topY: number,
     baseY: number,
+    gradBottom: number,
     out: DisplayListBuilder,
   ): void {
     const o = this.#opts;
@@ -289,7 +295,7 @@ class AreaKind implements SeriesKind<AreaItem> {
         // fresh start (after a gap / at window start) uses this vertex's colour.
         runTop = Number.isNaN(pendShareX) ? ct : pendTop;
         runBot = Number.isNaN(pendShareX) ? cb : pendBot;
-        w = out.area(baseY, this.#fillStyle(runTop, runBot, topY, baseY));
+        w = out.area(baseY, this.#fillStyle(runTop, runBot, topY, gradBottom));
         if (!Number.isNaN(pendShareX)) {
           w.vertex(pendShareX, pendShareY); // shared boundary vertex first
           pendShareX = Number.NaN;
@@ -328,7 +334,7 @@ class AreaKind implements SeriesKind<AreaItem> {
     decimateColumns(store, window, frame, horz, price, out, {
       shape: 'area',
       color: this.#opts.lineColor,
-      lineWidth: this.#opts.lineWidth,
+      lineWidth: this.#opts.lineWidth * frame.frame.vr, // device-px, matching emit() + the line/baseline siblings
     });
   }
 

@@ -14,7 +14,10 @@ import {
   defaultLogFormula,
   logFormulaForRange,
   canConvertFromLog,
+  reexpressLogRange,
+  deNoiseLogVisibleRange,
 } from './modes';
+import { precisionByMinMove } from '../../fmt';
 
 // study 04 §4.2 (percent/indexed), §4.3 (log + adaptive formula), architecture
 // §13.10 (indexed inverse FIXED) are the spec of record.
@@ -176,5 +179,163 @@ describe('canConvertFromLog (study 04 §4.3)', () => {
   test('non-finite bound → false', () => {
     expect(canConvertFromLog({ min: Number.NaN, max: 5 })).toBe(false);
     expect(canConvertFromLog({ min: 0, max: Number.POSITIVE_INFINITY })).toBe(false);
+  });
+});
+
+// --- M11: indexed negative-base round-trips to IDENTITY (architecture §13.10) -----
+// The §13.10 FIX promise restated as the property the navigator/converter rely on:
+// the forward+inverse pair composes to the identity for EITHER sign of base, so a
+// mode/formula change at a negative base produces NO visual jump.
+describe('indexed-to-100 negative-base composes to IDENTITY (architecture §13.10 FIX)', () => {
+  test('fromIndexed∘toIndexed = identity for negative base (no v+2b drift)', () => {
+    for (const b of [-100, -1, -0.5, -1234.5]) {
+      for (const v of [-50, -100, -137.25, -10, -250, -0.25]) {
+        expect(fromIndexed(toIndexed(v, b), b)).toBeCloseTo(v, 9);
+      }
+    }
+  });
+
+  test('toIndexed∘fromIndexed = identity (the other composition order) for negative base', () => {
+    const b = -100;
+    for (const x of [80, 95, 100, 110, 137.5]) {
+      expect(toIndexed(fromIndexed(x, b), b)).toBeCloseTo(x, 9);
+    }
+  });
+
+  test('explicitly NOT the reference defect: a negative-base round-trip does NOT land at v+2b', () => {
+    const b = -100;
+    const v = -90;
+    const back = fromIndexed(toIndexed(v, b), b);
+    expect(back).toBeCloseTo(v, 9);
+    expect(back).not.toBeCloseTo(v + 2 * b, 6); // v+2b = -290 — the reference's wrong result
+  });
+
+  test('percentage negative base also composes to identity (already correct in the reference)', () => {
+    const b = -100;
+    for (const v of [-50, -137.25, -10]) {
+      expect(fromPercent(toPercent(v, b), b)).toBeCloseTo(v, 9);
+    }
+  });
+});
+
+// --- M11: mid-drag re-expression of a live log range (study 04 §4.1/§5/§6) ---------
+describe('reexpressLogRange — mid-drag re-expression (study 04 §4.1 "re-express live drag snapshot")', () => {
+  test('same formula is the identity (content-equal old/new → range unchanged)', () => {
+    const f = defaultLogFormula();
+    const r = toLogRange({ min: 10, max: 100 }, f);
+    const out = reexpressLogRange(r, f, f);
+    expect(out.min).toBeCloseTo(r.min, 9);
+    expect(out.max).toBeCloseTo(r.max, 9);
+  });
+
+  test('preserves the RAW prices the bounds denote across a formula change (no visual jump)', () => {
+    // a range pinned to raw [5.0, 5.5] under the default formula, then the adaptive
+    // formula kicks in (d = 0.5 → L=5,C=1e-5). The re-expressed range must denote
+    // the SAME raw prices under the new formula.
+    const oldF = defaultLogFormula();
+    const newF = logFormulaForRange({ min: 5.0, max: 5.5 });
+    expect(newF.logicalOffset).toBe(5); // sanity: the adaptive formula actually changed
+    const stored = toLogRange({ min: 5.0, max: 5.5 }, oldF);
+    const re = reexpressLogRange(stored, oldF, newF);
+    // re-expressed bounds are the new formula's encoding of the same raw prices
+    expect(re.min).toBeCloseTo(toLog(5.0, newF), 9);
+    expect(re.max).toBeCloseTo(toLog(5.5, newF), 9);
+    // and decode back to the original raw prices under the new formula
+    expect(fromLog(re.min, newF)).toBeCloseTo(5.0, 7);
+    expect(fromLog(re.max, newF)).toBeCloseTo(5.5, 7);
+  });
+
+  test('is the exact compose toLogRange(fromLogRange(r, old), new)', () => {
+    const oldF = { logicalOffset: 4, coordOffset: 1e-4 };
+    const newF = { logicalOffset: 6, coordOffset: 1e-6 };
+    const r = toLogRange({ min: 42, max: 137 }, oldF);
+    const out = reexpressLogRange(r, oldF, newF);
+    const expected = toLogRange(fromLogRange(r, oldF), newF);
+    expect(out.min).toBeCloseTo(expected.min, 12);
+    expect(out.max).toBeCloseTo(expected.max, 12);
+  });
+
+  test('does NOT re-sort bounds (study 04 §4.2: ranges are not re-sorted)', () => {
+    // a deliberately inverted (min > max) log range stays inverted after re-expression
+    const oldF = defaultLogFormula();
+    const newF = logFormulaForRange({ min: 5.0, max: 5.1 });
+    const inverted = { min: toLog(5.1, oldF), max: toLog(5.0, oldF) }; // min > max on purpose
+    const out = reexpressLogRange(inverted, oldF, newF);
+    expect(out.min).toBeGreaterThan(out.max);
+  });
+});
+
+// --- M11: log de-noise on getVisibleRange (design 02 §10 / study 09 §4.8) ----------
+describe('deNoiseLogVisibleRange — getVisibleRange de-noise (study 09 §4.8)', () => {
+  test('snaps fromLog bounds to the tick grid and trims to precisionByMinMove', () => {
+    // store raw [10, 100] in log space, then de-noise back: round(v/minMove)*minMove
+    const minMove = 0.01;
+    const f = defaultLogFormula();
+    const stored = toLogRange({ min: 10, max: 100 }, f);
+    const out = deNoiseLogVisibleRange(stored, f, minMove);
+    expect(out.from).toBeCloseTo(10, 9);
+    expect(out.to).toBeCloseTo(100, 9);
+    // exactness: the result is on the tick grid to precisionByMinMove(0.01) = 2 dp
+    expect(precisionByMinMove(minMove)).toBe(2);
+    expect(out.from).toBe(Number((10).toFixed(2)));
+    expect(out.to).toBe(Number((100).toFixed(2)));
+  });
+
+  test('hand-derived: a noisy fromLog value snaps to the nearest minMove and rounds', () => {
+    // hand-derive: raw bound 12.3456 with minMove 0.01 → round(1234.56)*0.01 = 12.35
+    const minMove = 0.01;
+    const precision = precisionByMinMove(minMove); // 2
+    const f = defaultLogFormula();
+    const stored = { min: toLog(12.3456, f), max: toLog(987.654, f) };
+    const out = deNoiseLogVisibleRange(stored, f, minMove);
+    // expected = toNumber( (round(v/minMove)*minMove).toFixed(precision) )
+    const expFrom = Number((Math.round(12.3456 / minMove) * minMove).toFixed(precision));
+    const expTo = Number((Math.round(987.654 / minMove) * minMove).toFixed(precision));
+    expect(out.from).toBe(expFrom); // 12.35
+    expect(out.to).toBe(expTo); // 987.65
+    expect(out.from).toBe(12.35);
+    expect(out.to).toBe(987.65);
+  });
+
+  test('minMove 0.25 snaps to quarter ticks (precision 2)', () => {
+    const minMove = 0.25;
+    const f = defaultLogFormula();
+    // raw 100.30 → round(401.2)*0.25 = 100.25 ; raw 100.40 → round(401.6)*0.25 = 100.50
+    const stored = { min: toLog(100.3, f), max: toLog(100.4, f) };
+    const out = deNoiseLogVisibleRange(stored, f, minMove);
+    expect(out.from).toBe(100.25);
+    expect(out.to).toBe(100.5);
+  });
+
+  test('minMove >= 1 → precision 0, snaps to integers', () => {
+    const minMove = 1;
+    const f = defaultLogFormula();
+    const stored = { min: toLog(10.4, f), max: toLog(99.6, f) };
+    const out = deNoiseLogVisibleRange(stored, f, minMove);
+    expect(precisionByMinMove(minMove)).toBe(0);
+    expect(out.from).toBe(10);
+    expect(out.to).toBe(100);
+  });
+
+  test('kills exp(log(x)) float noise: result is bit-stable to the tick grid', () => {
+    // round-tripping 137.25 through log space leaves ~1e-13 noise; de-noise pins it.
+    const minMove = 0.01;
+    const f = logFormulaForRange({ min: 137.2, max: 137.3 }); // d = 0.1 < 1 → adaptive (L=5)
+    const stored = { min: toLog(137.25, f), max: toLog(137.26, f) };
+    const out = deNoiseLogVisibleRange(stored, f, minMove);
+    expect(out.from).toBe(137.25);
+    expect(out.to).toBe(137.26);
+    // the raw fromLog values carry noise that === would reject; the de-noised ones don't
+    expect(Number.isInteger(out.from / minMove)).toBe(true);
+  });
+
+  test('does NOT re-sort: from/to keep the stored bound order (study 04 §4.2)', () => {
+    const minMove = 0.01;
+    const f = defaultLogFormula();
+    const inverted = { min: toLog(100, f), max: toLog(10, f) }; // min encodes a larger raw price
+    const out = deNoiseLogVisibleRange(inverted, f, minMove);
+    expect(out.from).toBeCloseTo(100, 6);
+    expect(out.to).toBeCloseTo(10, 6);
+    expect(out.from).toBeGreaterThan(out.to);
   });
 });

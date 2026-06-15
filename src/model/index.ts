@@ -90,6 +90,22 @@ export type {
 export { TickMarkEngine, maxLabelWidthFor, maxIndexesPerMark, indexPerLabel } from './time-scale/ticks';
 export type { TickMark, BuildParams } from './time-scale/ticks';
 
+// --- M11 parity animations: eased scroll + last-price pulse (animation.ts, §4.4) -
+// The kinetic fling (`createKineticAnimation` / `HorzAnimation`) is exported above
+// from time-scale/navigator; these are the SCROLL (eased HorzAnimation, design 02 §9)
+// and the OVERLAY-level last-price PULSE (study 06 §4.15, architecture §4.4.8).
+export {
+  SCROLL_ANIMATION_DURATION_MS,
+  PULSE_PERIOD_MS,
+  PULSE_KEYFRAMES,
+  easeOutCubic,
+  createScrollAnimation,
+  pulseFrameAtPhase,
+  createPulseAnimation,
+  extendPulseEnd,
+} from './animation';
+export type { PulseFrame, PulseAnimation, LastPriceAnimationMode } from './animation';
+
 // --- price-scale: geometry, modes, autoscale, ticks, navigator (§4.6) ------------
 export { createPriceGeometry } from './price-scale/geometry';
 export type { PriceGeometry, PriceGeometryParams } from './price-scale/geometry';
@@ -108,8 +124,10 @@ export {
   defaultLogFormula,
   logFormulaForRange,
   canConvertFromLog,
+  reexpressLogRange,
+  deNoiseLogVisibleRange,
 } from './price-scale/modes';
-export type { LogFormula, MinMax } from './price-scale/modes';
+export type { LogFormula, MinMax, VisibleRange } from './price-scale/modes';
 export {
   assembleRange,
   finiteMerge,

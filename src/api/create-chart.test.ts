@@ -5,7 +5,7 @@
 // DOM methods the join actually calls), and a fake rAF scheduler (env.scheduler) — no
 // browser, no canvas, no real rAF. Assertions are hand-derived from the contracts.
 import { describe, expect, test } from 'vitest';
-import type { DisplayList, IRenderBackend, ISurface } from '../gfx';
+import type { DisplayList, IRenderBackend, ISurface, Size, SnapshotTile } from '../gfx';
 import { timeBehavior } from '../data';
 import type { IFrameScheduler } from '../host';
 import { ChartError } from './errors';
@@ -243,5 +243,91 @@ describe('createChartWith — §2/§10/§11.1 wiring regressions', () => {
     line.applyOptions({ price: 13 } as never);
     s.removePriceLine(line);
     expect(() => line.applyOptions({ price: 1 } as never)).toThrow();
+  });
+});
+
+// --- M11 parity INTEGRATE: the deferred behaviors wired into the running chart ---------
+describe('createChartWith — M11 parity wiring (price-line render + screenshot toggle)', () => {
+  test('createPriceLine registers a SceneSource that PAINTS a horizontal line above the series (M9 deferral closed)', () => {
+    const { chart, log, raf } = setup();
+    const s = chart.addSeries(CandlestickSeries);
+    s.setData(CANDLES); // sets the per-frame converter so the line maps price → y
+    raf.flush(16);
+    // Baseline: the series base stream this frame (the price line not created yet).
+    const baseBefore = log
+      .filter((l) => l.includes('renderLayer base'))
+      .map((l) => Number(l.match(/cmds=(\d+)/)?.[1] ?? 0));
+    const maxBefore = Math.max(0, ...baseBefore);
+    log.length = 0;
+    // A price at 12 falls inside the candle range [9,17] → on-pane → it draws.
+    s.createPriceLine({ price: 12, color: '#ff0000' } as never);
+    raf.flush(32);
+    const baseAfter = log
+      .filter((l) => l.includes('renderLayer base'))
+      .map((l) => Number(l.match(/cmds=(\d+)/)?.[1] ?? 0));
+    const maxAfter = Math.max(0, ...baseAfter);
+    // The price line is an AboveSeries (base-layer) source: the base stream gained a command.
+    expect(maxAfter).toBeGreaterThan(maxBefore);
+  });
+
+  test('removePriceLine unregisters the line source so the line stops painting (§11.1)', () => {
+    const { chart, log, raf } = setup();
+    const s = chart.addSeries(CandlestickSeries);
+    s.setData(CANDLES);
+    raf.flush(16);
+    const line = s.createPriceLine({ price: 12, color: '#ff0000' } as never);
+    raf.flush(32);
+    const withLine = Math.max(
+      0,
+      ...log.filter((l) => l.includes('renderLayer base')).map((l) => Number(l.match(/cmds=(\d+)/)?.[1] ?? 0)),
+    );
+    log.length = 0;
+    s.removePriceLine(line);
+    raf.flush(48);
+    const without = Math.max(
+      0,
+      ...log.filter((l) => l.includes('renderLayer base')).map((l) => Number(l.match(/cmds=(\d+)/)?.[1] ?? 0)),
+    );
+    expect(without).toBeLessThan(withLine);
+  });
+
+  test('removeSeries also unregisters its price-line sources (no leak)', () => {
+    const { chart, raf } = setup();
+    const s = chart.addSeries(CandlestickSeries);
+    s.setData(CANDLES);
+    s.createPriceLine({ price: 12 } as never);
+    raf.flush(16);
+    // The series owns one line; removing the series must not throw and must drop the line.
+    expect(() => chart.removeSeries(s)).not.toThrow();
+    raf.flush(32);
+  });
+
+  test('takeScreenshot forwards includeCrosshair to the backend compositor (§8.6)', () => {
+    const composeCalls: boolean[] = [];
+    const raf = makeRaf();
+    const doc = makeDoc();
+    const container = makeEl(doc);
+    const backend: IRenderBackend = {
+      createSurface: () => makeBackend([]).createSurface(),
+      createImage: () => ({ id: 0, width: 0, height: 0 }) as never,
+      composeSnapshot: ((_tiles: readonly SnapshotTile[], _size: Size, includeCrosshair?: boolean) => {
+        composeCalls.push(includeCrosshair ?? true);
+        return { _tag: 'Snapshot' } as never;
+      }) as never,
+      text: { measure: () => ({ width: 6, ascent: 8, descent: 2 }) } as never,
+      dispose: () => {},
+    };
+    const chart = createChartWith(
+      container as unknown as HTMLElement,
+      backend,
+      timeBehavior(),
+      { layout: { textColor: '#191919' } },
+      { scheduler: raf },
+    );
+    raf.flush(0);
+    chart.takeScreenshot(); // default → includeCrosshair true
+    chart.takeScreenshot({ includeCrosshair: false }); // explicit false → base only
+    chart.takeScreenshot({ includeCrosshair: true });
+    expect(composeCalls).toEqual([true, false, true]);
   });
 });

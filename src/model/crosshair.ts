@@ -36,16 +36,30 @@ export interface CrosshairPosition {
 }
 
 /** One series' OHLC values at the hovered index — the magnet candidate set
- *  (study 07 §4.8). Single-value series pass the same value in all four slots. */
+ *  (study 07 §4.8). Single-value series (Line/Area/Baseline) pass the same value
+ *  in all four slots, so Close and OHLC snapping both land on the datapoint.
+ *
+ *  `priceToCoordinate` is OPTIONAL: when present it is the *series' own* price
+ *  scale (study 07 §4.8: `series.priceScale.priceToCoordinate(bar[key])`), so an
+ *  overlay on a secondary scale competes fairly with the pane's default-scale
+ *  series — everything is compared in pixel space (§4.8 final note). When absent,
+ *  the candidate's values are assumed to live on the pane's default scale and the
+ *  shared `MagnetSnapArgs.priceToCoordinate` is used (the common single-scale
+ *  pane). A candidate value of `NaN` (the series has no bar at the hovered index,
+ *  or a gap) is skipped — never snapped to (study 07 §5: "no datum at index"). */
 export interface MagnetCandidate {
   readonly open: number;
   readonly high: number;
   readonly low: number;
   readonly close: number;
+  readonly priceToCoordinate?: (price: number) => number;
 }
 
-/** Pixel-space conversions for one price scale — supplied by the host pipeline so
- *  the model stays free of geometry ownership (study 07 §3.5). */
+/** Pixel-space conversions for the pane's DEFAULT price scale — supplied by the
+ *  host pipeline so the model stays free of geometry ownership (study 07 §3.5).
+ *  `priceToCoordinate` maps the pointer price (and any default-scale candidate) to
+ *  Y; `coordinateToPrice` converts the WINNING Y back to a default-scale price so
+ *  the re-derived crosshair y in §3.5 reproduces exactly that Y (§4.8 final note). */
 export interface MagnetConverters {
   priceToCoordinate(price: number): number;
   coordinateToPrice(coordinate: number): number;
@@ -69,22 +83,44 @@ export interface HoverTarget {
   readonly data?: unknown;
 }
 
-/** Magnet snap (study 07 §4.8). Compare candidate Ys to the pointer Y in PIXEL
- *  space (so series on different scales compete fairly), pick the nearest, and
- *  convert the winning Y back through the pane's scale. Normal mode and the empty-
- *  candidate case pass the price through unchanged. */
+/** Magnet snap (study 07 §4.8 + the §5 gotchas — M11 parity).
+ *
+ *  Pure model logic: given the raw pointer `price` (already on the pane's default
+ *  scale) and the nearby series' candidate values, compute the SNAPPED default-scale
+ *  price the host will feed back through §3.5. The four modes are the const-object
+ *  union: `Normal`/`Hidden` never snap (price passes through); `Magnet` snaps to the
+ *  nearest series DATAPOINT (Close key only); `MagnetOHLC` snaps to the nearest OHLC
+ *  LEVEL (open/high/low/close).
+ *
+ *  Comparison is in PIXEL space (study 07 §4.8 final note): each candidate value is
+ *  mapped to Y through its OWN scale (`MagnetCandidate.priceToCoordinate`) when given,
+ *  else the pane default `priceToCoordinate`, so series on different price scales
+ *  compete fairly. The winning Y is converted back through the pane's default scale
+ *  (`coordinateToPrice`) so the re-derived crosshair y reproduces exactly that Y.
+ *
+ *  Pass-through cases (price returned unchanged, study 07 §4.8 / §5):
+ *   • mode is not a magnet mode,
+ *   • no candidates,
+ *   • the pointer `price` / its `targetY` is NaN (empty default scale — NaN survives
+ *     the pipeline and simply hides the horizontal line, §5),
+ *   • every candidate value is NaN (no series has a datum at the hovered index, §5). */
 export function magnetSnapPrice(args: MagnetSnapArgs): number {
   const { mode, price, candidates, priceToCoordinate, coordinateToPrice } = args;
   if (mode !== CrosshairMode.Magnet && mode !== CrosshairMode.MagnetOHLC) return price;
   if (candidates.length === 0) return price;
 
   const targetY = priceToCoordinate(price);
+  // Empty default scale → NaN pointer Y has no meaningful nearest; NaN survives (§5).
+  if (!Number.isFinite(targetY)) return price;
+
   const ohlc = mode === CrosshairMode.MagnetOHLC;
   let bestY = Number.NaN;
   let bestDist = Number.POSITIVE_INFINITY;
 
-  const consider = (value: number): void => {
-    const y = priceToCoordinate(value);
+  const consider = (value: number, toY: (p: number) => number): void => {
+    if (!Number.isFinite(value)) return; // no datum at index / gap — never snap to it (§5)
+    const y = toY(value);
+    if (!Number.isFinite(y)) return; // candidate scale empty — skip (§4.8 "own scale empty")
     const d = Math.abs(y - targetY);
     if (d < bestDist) {
       bestDist = d;
@@ -93,12 +129,14 @@ export function magnetSnapPrice(args: MagnetSnapArgs): number {
   };
 
   for (const c of candidates) {
+    // The series' own scale (overlay on a secondary scale) or the pane default (§4.8).
+    const toY = c.priceToCoordinate ?? priceToCoordinate;
     if (ohlc) {
-      consider(c.open);
-      consider(c.high);
-      consider(c.low);
+      consider(c.open, toY);
+      consider(c.high, toY);
+      consider(c.low, toY);
     }
-    consider(c.close);
+    consider(c.close, toY);
   }
 
   if (!Number.isFinite(bestY)) return price;

@@ -94,8 +94,13 @@ export function makeBackend(env: BackendEnv, options?: CanvasBackendOptions): IR
     return createCanvasImage(source);
   }
 
-  function snapshot(tiles: readonly SnapshotTile[], mediaSize: Size): Snapshot {
-    return composeSnapshot(tiles, mediaSize, env.getDpr(), env.createCanvas);
+  // `includeCrosshair` is an optional extra arg (default true in composeSnapshot): the
+  // IRenderBackend contract is composeSnapshot(tiles, mediaSize), and a (tiles, mediaSize)
+  // call is structurally assignable to this wider signature, so callers that don't pass
+  // the flag get the crosshair-included screenshot. The host's screenshot orchestration
+  // forwards it when an `includeCrosshair: false` screenshot is requested (§8.6).
+  function snapshot(tiles: readonly SnapshotTile[], mediaSize: Size, includeCrosshair?: boolean): Snapshot {
+    return composeSnapshot(tiles, mediaSize, env.getDpr(), env.createCanvas, includeCrosshair);
   }
 
   return {

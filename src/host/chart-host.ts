@@ -237,8 +237,10 @@ export class ChartHost implements FrameDriver {
   }
 
   /** Take a screenshot: a synchronous flush, then a single-pass tile collection over
-   *  the known rects → backend.composeSnapshot (§7). */
-  takeScreenshot(): Snapshot {
+   *  the known rects → backend.composeSnapshot (§7). `includeCrosshair` (default true)
+   *  is forwarded to the collector → compositor: when false the overlay layer (the
+   *  crosshair/cursor/overlay bands) is omitted from the composite (§8.6). */
+  takeScreenshot(includeCrosshair = true): Snapshot {
     this.#loop.flushSync(createMask({ level: UpdateLevel.Render }), this.#deps.clock());
     const L = this.#layout ?? this.computeLayoutNow();
     return captureScreenshot(
@@ -247,6 +249,7 @@ export class ChartHost implements FrameDriver {
       L.separators,
       this.#deps.separatorColor ?? '#e0e3eb',
       L.chartSize,
+      includeCrosshair,
     );
   }
 

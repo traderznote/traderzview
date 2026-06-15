@@ -86,6 +86,127 @@ describe('magnetSnapPrice (study 07 §4.8)', () => {
     });
     expect(out).toBe(33);
   });
+
+  test('Hidden mode never snaps — price passes through (study 07 §5)', () => {
+    const out = magnetSnapPrice({
+      mode: CrosshairMode.Hidden,
+      price: 30,
+      candidates: [{ open: 40, high: 50, low: 39, close: 45 }],
+      priceToCoordinate,
+      coordinateToPrice,
+    });
+    expect(out).toBe(30);
+  });
+
+  // M11 parity hardening — study 07 §4.8 + §5 -----------------------------------------
+
+  test('a candidate on its OWN price scale competes in pixel space (study 07 §4.8)', () => {
+    // Default scale: y = 100 - price. A SECOND series lives on a scale stretched 2x with a
+    // -100 offset: y = 100 - 2*(price - 100) = 300 - 2*price (so its price 130 → y=40).
+    // Pointer price 50 → default y=50.
+    //   default-scale candidate close=45 → default y=55 → |55-50| = 5.
+    //   own-scale candidate    close=130 → own     y=40 → |40-50| = 10.
+    // Nearest pixel Y is 55 → converted back through the DEFAULT scale → price 45.
+    const ownScale = (p: number): number => 300 - 2 * p;
+    const out = magnetSnapPrice({
+      mode: CrosshairMode.Magnet,
+      price: 50,
+      candidates: [
+        { open: 41, high: 50, low: 39, close: 45 }, // default scale (no converter)
+        { open: 120, high: 140, low: 115, close: 130, priceToCoordinate: ownScale },
+      ],
+      priceToCoordinate,
+      coordinateToPrice,
+    });
+    expect(out).toBe(45);
+  });
+
+  test('own-scale candidate can WIN, but the result is a DEFAULT-scale price (study 07 §4.8 final note)', () => {
+    // Same scales as above. Pointer price 35 → default y=65.
+    //   default-scale candidate close=45 → default y=55 → |55-65| = 10.
+    //   own-scale candidate    close=130 → own     y=40 → |40-65| = 25.
+    //   own-scale candidate    close=120 → own     y=60 → |60-65| = 5.  ← nearest pixel Y=60.
+    // Winning Y=60 is converted back through the DEFAULT scale: coordinateToPrice(60) = 40.
+    const ownScale = (p: number): number => 300 - 2 * p;
+    const out = magnetSnapPrice({
+      mode: CrosshairMode.Magnet,
+      price: 35,
+      candidates: [
+        { open: 41, high: 50, low: 39, close: 45 },
+        { open: 118, high: 122, low: 115, close: 120, priceToCoordinate: ownScale },
+      ],
+      priceToCoordinate,
+      coordinateToPrice,
+    });
+    expect(out).toBe(40); // 100 - 60, NOT the own-scale price 120
+  });
+
+  test('NaN candidate values (no datum / gap at index) are skipped (study 07 §5)', () => {
+    // close=NaN must be skipped; the only finite close is 45 (y=55) → snap to 45.
+    const out = magnetSnapPrice({
+      mode: CrosshairMode.Magnet,
+      price: 30,
+      candidates: [
+        { open: NaN, high: NaN, low: NaN, close: NaN }, // series has no bar here
+        { open: 41, high: 50, low: 39, close: 45 },
+      ],
+      priceToCoordinate,
+      coordinateToPrice,
+    });
+    expect(out).toBe(45);
+  });
+
+  test('MagnetOHLC skips NaN OHLC slots but still snaps to the finite ones (study 07 §5)', () => {
+    // open=NaN, high=NaN are skipped; low=10 (y=90), close=45 (y=55) remain.
+    // pointer 12 → y=88; nearest finite is low=10 (y=90) → price 10.
+    const out = magnetSnapPrice({
+      mode: CrosshairMode.MagnetOHLC,
+      price: 12,
+      candidates: [{ open: NaN, high: NaN, low: 10, close: 45 }],
+      priceToCoordinate,
+      coordinateToPrice,
+    });
+    expect(out).toBe(10);
+  });
+
+  test('a NaN pointer price (empty default scale) survives the pipeline (study 07 §5)', () => {
+    // priceToCoordinate(NaN) = NaN → no meaningful nearest → NaN passes through, hiding the line.
+    const out = magnetSnapPrice({
+      mode: CrosshairMode.Magnet,
+      price: NaN,
+      candidates: [{ open: 40, high: 50, low: 39, close: 45 }],
+      priceToCoordinate,
+      coordinateToPrice,
+    });
+    expect(Number.isNaN(out)).toBe(true);
+  });
+
+  test('every candidate value NaN → price passes through unchanged (study 07 §5)', () => {
+    const out = magnetSnapPrice({
+      mode: CrosshairMode.MagnetOHLC,
+      price: 33,
+      candidates: [{ open: NaN, high: NaN, low: NaN, close: NaN }],
+      priceToCoordinate,
+      coordinateToPrice,
+    });
+    expect(out).toBe(33);
+  });
+
+  test('equal-distance candidates keep the FIRST seen (strict < tie-break)', () => {
+    // pointer 50 → y=50. close=55 → y=45 (|45-50|=5); close=45 → y=55 (|55-50|=5). Tie.
+    // The first-seen (close=55) must win because the comparison is strict `<`.
+    const out = magnetSnapPrice({
+      mode: CrosshairMode.Magnet,
+      price: 50,
+      candidates: [
+        { open: 55, high: 56, low: 54, close: 55 },
+        { open: 45, high: 46, low: 44, close: 45 },
+      ],
+      priceToCoordinate,
+      coordinateToPrice,
+    });
+    expect(out).toBe(55);
+  });
 });
 
 describe('Crosshair position set/clear (study 07 §3.5 / §5)', () => {

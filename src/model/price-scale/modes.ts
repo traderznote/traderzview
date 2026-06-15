@@ -10,6 +10,10 @@
 //     which round-tripped negative-base values to `v + 2b`.
 //   • The mode is a const-object union, not an `enum` (erasableSyntaxOnly, M0).
 
+// model may import core / fmt / data (architecture §3.1). precisionByMinMove is the
+// fmt-owned tick-precision rule (study 09 §4.3) reused verbatim by the log de-noise.
+import { precisionByMinMove } from '../../fmt';
+
 /** The four scale modes (architecture §4.6). Const-object union, not an enum. */
 export const PriceScaleMode = {
   Normal: 0,
@@ -137,4 +141,59 @@ export function logFormulaForRange(rawRange: MinMax | null): LogFormula {
 export function canConvertFromLog(logRange: MinMax, formula: LogFormula = defaultLogFormula()): boolean {
   const raw = fromLogRange(logRange, formula);
   return Number.isFinite(raw.min) && Number.isFinite(raw.max);
+}
+
+/**
+ * MID-DRAG re-expression of a log range when the adaptive formula changes during a
+ * live gesture (study 04 §4.1: "also re-express any live drag snapshot in f'"; §5
+ * "Log formula drift"; §6 KEEP "including re-expressing live drag snapshots").
+ *
+ * The range is stored in LOG space, so a formula change would otherwise move every
+ * stored log value to a different raw price — a visible jump. Re-expression takes
+ * the range OUT of the old formula (to raw) and back INTO the new one, preserving
+ * the raw prices the bounds denote so the on-screen range is unchanged:
+ *
+ *     reexpress(r, old, new) = toLogRange(fromLogRange(r, old), new)
+ *
+ * Same-formula is the identity (no-op when `old === new` content-wise). The compose
+ * is exact in raw space; tiny float error only re-enters via `10^x` and is handled
+ * downstream by `deNoiseLogVisibleRange`. Bounds that do not survive the round trip
+ * finitely (`canConvertFromLog` false) are returned re-expressed regardless — the
+ * caller decides whether to fall back to autoscale (study 04 §4.3).
+ */
+export function reexpressLogRange(range: MinMax, oldFormula: LogFormula, newFormula: LogFormula): MinMax {
+  return toLogRange(fromLogRange(range, oldFormula), newFormula);
+}
+
+/** A user-space (raw price) min/max pair, de-noised to the tick grid (study 09 §4.8). */
+export interface VisibleRange {
+  readonly from: number;
+  readonly to: number;
+}
+
+/** Snap a raw value to the nearest `minMove` then trim to `precision` decimals,
+ *  matching the reference's `round(v/minMove)·minMove` then `toFixed` dance that
+ *  cancels the float noise `exp(log(x))` reintroduces (study 09 §4.8). A non-finite
+ *  or zero `minMove` degrades to a plain `toFixed` (no grid snap). */
+function snapToTickGrid(value: number, minMove: number, precision: number): number {
+  const snapped = Number.isFinite(minMove) && minMove !== 0 ? Math.round(value / minMove) * minMove : value;
+  return Number(snapped.toFixed(precision));
+}
+
+/**
+ * Public `getVisibleRange` de-noise for LOG mode (design 02 §10 / study 09 §4.8).
+ * The internal range is stored in log space; the getter must return user-space raw
+ * prices, but `fromLog` (i.e. `10^x`) reintroduces float noise, so each raw bound
+ * is snapped to the tick grid: `round(v / minMove) · minMove`, then trimmed to
+ * `precisionByMinMove(minMove)` decimals. `from`/`to` are NOT re-sorted — the log
+ * range is not re-sorted either (study 04 §4.2), so a negative/inverted log range
+ * keeps its bound order. Non-log callers use the raw bounds directly (not here).
+ */
+export function deNoiseLogVisibleRange(logRange: MinMax, formula: LogFormula, minMove: number): VisibleRange {
+  const raw = fromLogRange(logRange, formula);
+  const precision = precisionByMinMove(minMove);
+  return {
+    from: snapToTickGrid(raw.min, minMove, precision),
+    to: snapToTickGrid(raw.max, minMove, precision),
+  };
 }
