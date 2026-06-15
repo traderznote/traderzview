@@ -10,7 +10,8 @@
   },
   "exports": {
     ".": "./dist/index.mjs",
-    "./gfx": "./dist/gfx.mjs"
+    "./gfx": "./dist/gfx.mjs",
+    "./extras": "./dist/extras.mjs"
   },
   "files": [
     "dist"

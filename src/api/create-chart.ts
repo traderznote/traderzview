@@ -20,7 +20,7 @@ import {
   buildHorzGeometry,
   buildPriceConverter,
 } from '../model';
-import type { Pane, ChartOptions } from '../model';
+import type { Pane, ChartOptions, IPrimitive as ModelIPrimitive } from '../model';
 import { ChartHost, createRafScheduler } from '../host';
 import type {
   ChartHostHooks,
@@ -32,8 +32,16 @@ import type {
   MeasuredAxes,
   PaneSurfaceConfigs,
 } from '../host';
-import { PaneScene, itemWindow, createPriceLineSource } from '../views';
-import type { ItemBuffer, PriceLineSource, PriceLineState, SeriesKind } from '../views';
+import { PaneScene, PrimitiveBinding, itemWindow, createPriceLineSource } from '../views';
+import type {
+  ItemBuffer,
+  OwnerPlacement,
+  PriceLineSource,
+  PriceLineState,
+  SeriesKind,
+  SurfaceKind,
+  TaggedPrimitiveSource,
+} from '../views';
 import { createChartApi } from './chart';
 import type { ChartWiring, DisposedCell, IChart, IPane, IPriceScale } from './chart';
 import { createSeriesApi } from './series';
@@ -45,6 +53,7 @@ import type { PriceScalePort } from './price-scale';
 import { createPaneApi } from './pane';
 import type { PanePort } from './pane';
 import { createPriceLineApi } from './price-line';
+import type { IPrimitive, PrimitiveContext } from './primitives';
 import { EventHub, type MouseEventHandler, type StoreDiff } from './events';
 import { ChartErrorCode, throwChartError } from './errors';
 import { createSeriesOptions, snapshot } from './options';
@@ -178,9 +187,24 @@ export function createChartWith<H = Time>(
     priceScaleHandles.set(key, made);
     return made.handle;
   };
+  // The §12 pane-attached primitive hooks. Forward-declared here (paneHandle is built
+  // before the binder exists) and populated once the binder/ctxFor are wired below; a
+  // pane handle calls through these at user-attach time, long after construction.
+  let panePrimitiveAttach: (pane: Pane, p: ModelIPrimitive) => void = () => {};
+  let panePrimitiveDetach: (p: ModelIPrimitive) => void = () => {};
   const paneHandle = (pane: Pane): IPane<H> => {
     let h = paneHandles.get(pane);
-    if (h === undefined) (h = makePaneHandle<H>(pane, model, disposed, priceScaleHandle)), paneHandles.set(pane, h);
+    if (h === undefined) {
+      h = makePaneHandle<H>(
+        pane,
+        model,
+        disposed,
+        priceScaleHandle,
+        (p) => panePrimitiveAttach(pane, p),
+        (p) => panePrimitiveDetach(p),
+      );
+      paneHandles.set(pane, h);
+    }
     return h;
   };
 
@@ -206,6 +230,67 @@ export function createChartWith<H = Time>(
   host = buildHost<H>(backend, element, model, sceneFor, env?.scheduler, profiler, markInput);
   host.setSize(size); // one synchronous Layout flush → the first paint
 
+  // The chart facade handle, assigned at the end (before any user attach call can run) so
+  // a PrimitiveContext can hand `ctx.chart` to plugins (design 02 §12). Lazily read.
+  let chartApi: IChart<H> | null = null;
+
+  // --- §12 HOST PRIMITIVE BINDING (design 02 §12 + design 05 §2.2 + §9.1 slot 4) ------
+  // The M8/M9 seam gap M12 exposed: attachPrimitive was inert. We now drive the full
+  // lifecycle over the EXISTING views PrimitiveBinding seam — call attached(ctx), register
+  // each tagged source into the owner's PaneScene, and detach EXACTLY ONCE on auto-detach
+  // (removeSeries / removePane / dispose). The registry keys on the primitive identity so
+  // detach is idempotent. Only `target:'pane'` sources home to an api-owned scene here; a
+  // `price-axis`/`time-axis` target's destination scene is created host-side per frame
+  // (buildHost's paneConfigs/measure) and is NOT reachable through this seam — those sources
+  // still drive lifecycle (attached/detached fire) but are not registered (a separate seam).
+  const binder = createPrimitiveBinder<H>(model);
+
+  /** Build the §12 context handed to a primitive's attached(). `seriesHandle` is present
+   *  iff series-attached. `requestUpdate(scope)` maps onto the §4.4 UpdateLevel; `images`
+   *  is the sole backend upload path (§5.2); `input`/`chart` resolve lazily (post-attach). */
+  const ctxFor = (pane: Pane, seriesHandle?: ISeries<SeriesType, H>): PrimitiveContext<H> => ({
+    get chart(): IChart<H> {
+      return chartApi!;
+    },
+    series: seriesHandle,
+    pane: paneHandle(pane) as unknown as PrimitiveContext<H>['pane'],
+    requestUpdate(scope): void {
+      model.invalidate(
+        scope === 'layout' ? UpdateLevel.Layout : scope === 'render' ? UpdateLevel.Render : UpdateLevel.Overlay,
+      );
+    },
+    get input() {
+      return host!.input();
+    },
+    images: { create: (src: unknown) => backend.createImage(src as never) },
+  });
+
+  /** The owner's CURRENT placement the PrimitiveBinding resolves a price-axis target from
+   *  (the pane id + the owner's scale side). Series-attached follows the series' scale;
+   *  pane-attached defaults to the right axis (doc 02 targeting rule). */
+  const placementFor = (pane: Pane, scaleId: string | null): OwnerPlacement => ({
+    paneId: pane.id(),
+    priceScaleId: scaleId,
+    axisSide: scaleId === 'left' ? 'left' : scaleId === null ? null : 'right',
+  });
+
+  // Now that the binder + ctxFor exist, populate the forward-declared pane-attach hooks.
+  // A pane-attached primitive homes its sources into THIS pane's scene (sceneFor(pane));
+  // its placement defaults to the right axis (doc 02 targeting rule). The owner token is
+  // the model Pane, so removePane (destroyPane, below) auto-detaches its primitives once.
+  panePrimitiveAttach = (pane: Pane, p: ModelIPrimitive): void => {
+    binder.attach(p as unknown as IPrimitive<H>, ctxFor(pane), {
+      owner: pane,
+      scene: sceneFor(pane),
+      ownerZ: ownerSeq, // pane primitives share the pane's base owner-z (under the series)
+      ownerId: ++ownerSeq,
+      placement: placementFor(pane, 'right'),
+    });
+  };
+  panePrimitiveDetach = (p: ModelIPrimitive): void => {
+    binder.detach(p as unknown as IPrimitive<H>);
+  };
+
   const wiring: ChartWiring<H> = {
     createSeries(definition, seriesOpts, paneIndex) {
       const panes = model.panes();
@@ -225,6 +310,9 @@ export function createChartWith<H = Time>(
         paneHandle,
         priceScaleHandle,
         counters,
+        binder,
+        ctxFor,
+        placementFor,
       );
       wired.set(w.model, w);
       pane.addSeries(w.paneSeries);
@@ -234,11 +322,18 @@ export function createChartWith<H = Time>(
     destroySeries(m) {
       const w = wired.get(m);
       if (w === undefined) return;
+      binder.detachOwner(m); // §2.2 item 2: auto-detach this series' primitives (once each)
       w.scene.unregister(w.source); // stop compositing it (perf §4.4.2)
       w.disposeExtras(); // unregister this series' price-line SceneSources too (§11.1)
       w.pane.removeSeries(w.paneSeries); // drop it from the model pane
       wired.delete(m);
       model.invalidate(UpdateLevel.Layout);
+    },
+    destroyPane(pane) {
+      // §2.2 item 2: detach this pane's pane-attached primitives AND any series-attached
+      // primitives on series living on it, EXACTLY ONCE each (the binder is idempotent).
+      binder.detachOwner(pane);
+      for (const w of wired.values()) if (w.pane === pane) binder.detachOwner(w.model);
     },
     createPane: (pane) => paneHandle(pane),
     createTimeScale: () => makeTimeScaleHandle<H>(model, behavior, disposed, liveBarSpacing),
@@ -267,13 +362,14 @@ export function createChartWith<H = Time>(
     events,
   };
 
-  return createChartApi<H>({
+  chartApi = createChartApi<H>({
     model,
     host: {
       setSize: (s) => host!.setSize(s),
       takeScreenshot: (includeCrosshair) => host!.takeScreenshot(includeCrosshair),
       input: () => host!.input(),
       dispose: () => {
+        binder.detachAll(); // §2.2 item 2: detached() once for EVERY attached primitive
         host!.dispose();
         if (mount.contains(element)) mount.removeChild(element);
       },
@@ -284,6 +380,7 @@ export function createChartWith<H = Time>(
     element,
     barSpacing: liveBarSpacing,
   });
+  return chartApi;
 }
 
 // --- createChart: the tree-shaken sugar (design 01 §8) -----------------------------
@@ -325,6 +422,82 @@ function resolveContainer(container: HTMLElement | string): HTMLElement {
   return el;
 }
 
+// --- §12 primitive binder: the attach/detach lifecycle over the views seam ----------
+
+/** What `attach` needs to home a primitive's sources + drive its lifecycle. The `owner`
+ *  token (model Series or Pane) is the key auto-detach (removeSeries/removePane) keys on. */
+interface PrimitiveAttachInit {
+  readonly owner: object;
+  readonly scene: PaneScene;
+  readonly ownerZ: number;
+  readonly ownerId: number;
+  readonly placement: OwnerPlacement;
+}
+
+/** One live primitive's binding state: the registered bindings (for unregister) + the
+ *  PaneScene each homed to, so detach unregisters from the SAME scene + fires detached once. */
+interface PrimitiveEntry {
+  readonly owner: object;
+  readonly scene: PaneScene;
+  readonly bindings: PrimitiveBinding[];
+}
+
+/**
+ * The chart-scoped primitive registry (design 02 §12 + design 05 §2.2). `attach(p, ctx,
+ * init)` runs p.attached(ctx), wraps each `target:'pane'` source in a PrimitiveBinding,
+ * registers it into the owner's PaneScene, and schedules one Render frame (§2.2 item 1).
+ * `detachOwner`/`detachAll` fire p.detached() EXACTLY ONCE and unregister its sources
+ * (§2.2 item 2); a primitive detached twice is a no-op (idempotent). A `price-axis`/
+ * `time-axis` target source's destination scene is host-owned (created per frame in
+ * buildHost) and not reachable here — those sources still drive lifecycle but are not
+ * registered (NOTE: surfacing host axis scenes back to the api is a separate seam).
+ */
+function createPrimitiveBinder<H>(model: ChartModel<H, unknown>): {
+  attach(p: IPrimitive<H>, ctx: PrimitiveContext<H>, init: PrimitiveAttachInit): void;
+  detach(p: IPrimitive<H>): void;
+  detachOwner(owner: object): void;
+  detachAll(): void;
+} {
+  const entries = new Map<IPrimitive<H>, PrimitiveEntry>();
+
+  const detachOne = (p: IPrimitive<H>): void => {
+    const entry = entries.get(p);
+    if (entry === undefined) return; // already detached — idempotent (§2.2 exactly-once)
+    entries.delete(p);
+    for (const b of entry.bindings) entry.scene.unregister(b.source());
+    p.detached?.(); // fire the host-driven lifecycle hook EXACTLY once
+    model.invalidate(UpdateLevel.Render); // the source is gone → recomposite the base layer
+  };
+
+  return {
+    attach(p, ctx, init): void {
+      if (entries.has(p)) return; // attached already (a re-attach is a no-op here)
+      p.attached?.(ctx);
+      const bindings: PrimitiveBinding[] = [];
+      for (const raw of p.sources?.() ?? []) {
+        const tagged = raw as unknown as TaggedPrimitiveSource; // views narrows source: unknown→SceneSource
+        const binding = new PrimitiveBinding(tagged, init.placement);
+        // Only a source homing to the api-owned pane scene is registered here; an axis-
+        // target source resolves to a host-owned scene unreachable through this seam.
+        const home: SurfaceKind | null = binding.surfaceKey();
+        if (home === 'pane') init.scene.register(binding.source(), { ownerZ: init.ownerZ, ownerId: init.ownerId });
+        bindings.push(binding);
+      }
+      entries.set(p, { owner: init.owner, scene: init.scene, bindings });
+      model.invalidate(UpdateLevel.Render); // §2.2 item 1: attach schedules one Render frame
+    },
+    detach(p): void {
+      detachOne(p); // explicit handle.detach() path — keyed on the primitive, exactly-once
+    },
+    detachOwner(owner): void {
+      for (const [p, e] of [...entries]) if (e.owner === owner) detachOne(p);
+    },
+    detachAll(): void {
+      for (const p of [...entries.keys()]) detachOne(p);
+    },
+  };
+}
+
 // --- wiring one series: data pipeline + SceneSource + the ISeries facade port -------
 
 function wireSeries<H>(
@@ -342,6 +515,9 @@ function wireSeries<H>(
   paneHandle: (pane: Pane) => IPane<H>,
   priceScaleHandle: (pane: Pane, scaleId: string) => IPriceScale,
   counters: IFrameCounters | undefined,
+  binder: ReturnType<typeof createPrimitiveBinder<H>>,
+  ctxFor: (pane: Pane, series?: ISeries<SeriesType, H>) => PrimitiveContext<H>,
+  placementFor: (pane: Pane, scaleId: string | null) => OwnerPlacement,
 ): Wired<H> {
   const merged = createSeriesOptions(
     definition.defaultOptions as Record<string, unknown>,
@@ -523,6 +699,34 @@ function wireSeries<H>(
     port,
     definition.normalizeOptions,
   );
+
+  // §12 host binding for SERIES-attached primitives: the series facade calls
+  // model.attachPrimitive(p) (which still pushes to the model #primitives list the
+  // autoscale merge reads); we wrap the instance methods so the SAME call ALSO drives
+  // the host lifecycle — attached(ctx) + source registration into THIS pane's scene +
+  // a Render frame, and detach fires detached() exactly once (the auto-detach path is
+  // destroySeries → binder.detachOwner(modelSeries), below). The placement follows the
+  // series' current scale (its price-axis sources home to that side).
+  // `p` infers as the MODEL IPrimitive (the contextual type of the method we override);
+  // the binder works in the api IPrimitive<H> (the host-lifecycle superset), so cast at
+  // the boundary. baseAttach keeps the model #primitives push the autoscale merge reads.
+  const baseAttach = modelSeries.attachPrimitive.bind(modelSeries);
+  const baseDetach = modelSeries.detachPrimitive.bind(modelSeries);
+  modelSeries.attachPrimitive = (p): void => {
+    baseAttach(p);
+    binder.attach(p as unknown as IPrimitive<H>, ctxFor(pane, handle), {
+      owner: modelSeries,
+      scene,
+      ownerZ,
+      ownerId,
+      placement: placementFor(pane, scaleIdOf(modelSeries)),
+    });
+  };
+  modelSeries.detachPrimitive = (p): void => {
+    baseDetach(p); // drop it from the model #primitives list (autoscale stops merging it)
+    binder.detach(p as unknown as IPrimitive<H>); // host lifecycle: detached() + unregister, once
+  };
+
   const disposeExtras = (): void => {
     for (const e of priceLineEntries) scene.unregister(e.source);
     priceLineEntries.clear();
@@ -553,6 +757,10 @@ function makeBuffer(kind: SeriesKind<unknown>): ItemBuffer<unknown> {
 // A PriceConverter spanning the store's value range over the pane height. A full chart
 // derives this from the price-scale autoscale; here it bounds the data so emit makes
 // in-range geometry (the backend stream is what the e2e gates on).
+// DEFERRED (M12): feeding the attached primitives' autoscale MARGINS (max-merged correctly
+// at the model level — Series.#baseAutoscaleInfo §9.2.3) into this LIVE geometry would
+// shift demo-chart's golden, so priceConverterFor is left as-is; primitive-margin-into-
+// live-geometry is a separate seam (the real price-scale autoscale path) for a later milestone.
 function priceConverterFor(store: PlotStoreView, height: number): ReturnType<typeof buildPriceConverter> {
   let min = Number.POSITIVE_INFINITY;
   let max = Number.NEGATIVE_INFINITY;
@@ -580,6 +788,8 @@ function makePaneHandle<H>(
   model: ChartModel<H>,
   disposed: DisposedCell,
   priceScaleHandle: (pane: Pane, scaleId: string) => IPriceScale,
+  attachPrimitive: (p: ModelIPrimitive) => void,
+  detachPrimitive: (p: ModelIPrimitive) => void,
 ): IPane<H> {
   const port: PanePort<H> = {
     isDisposed: () => disposed.value,
@@ -601,8 +811,8 @@ function makePaneHandle<H>(
     preserveEmptyPane: () => pane.preserveEmptyPane(),
     setPreserveEmptyPane: (keep) => pane.setPreserveEmptyPane(keep),
     element: () => null,
-    attachPrimitive: () => {},
-    detachPrimitive: () => {},
+    attachPrimitive, // §12: drive the host binding (was a no-op — the M12 seam gap)
+    detachPrimitive,
   };
   return createPaneApi<H>(port) as unknown as IPane<H>;
 }

@@ -134,6 +134,10 @@ export interface ChartWiring<H = unknown> {
   ): { model: Series; handle: ISeries<SeriesType, H> };
   /** Tear down a series' store/views/membership (the inverse of createSeries). */
   destroySeries(model: Series): void;
+  /** Auto-detach a removed pane's attached primitives (design 05 §2.2 item 2 — fire
+   *  detached() once + unregister their sources). Optional: a wiring without primitive
+   *  binding (test fakes) omits it. Called BEFORE the model drops the pane. */
+  destroyPane?(pane: Pane): void;
   /** Build the cached pane handle for a model Pane (§2 identity is the chart's cache). */
   createPane(pane: Pane): IPane<H>;
   /** Build the singleton time-scale handle (§2). Called once, then cached. */
@@ -327,6 +331,7 @@ export function createChartApi<H = unknown>(deps: ChartApiDeps<H>): IChart<H> {
         throw new RangeError(`pane index ${index} out of bounds`);
       }
       if (list.length === 1) return; // removing the last pane is a no-op (§7 / §16.4)
+      wiring.destroyPane?.(list[index]!); // §2.2: auto-detach the pane's primitives first
       model.panes().removePane(list[index]!);
       model.invalidate(UpdateLevel.Layout);
     },

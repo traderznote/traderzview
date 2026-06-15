@@ -28,4 +28,30 @@ export default [
     limit: '4 KB',
     brotli: true,
   },
+  // The four first-party plugins (M12), each as its own bundle so the per-plugin caps
+  // measure the plugin's marginal cost in isolation (the "extras increments" row above).
+  {
+    name: 'extras/series-markers',
+    path: 'dist/extras/series-markers.mjs',
+    limit: '3 KB',
+    brotli: true,
+  },
+  {
+    name: 'extras/up-down-markers',
+    path: 'dist/extras/up-down-markers.mjs',
+    limit: '2 KB',
+    brotli: true,
+  },
+  {
+    name: 'extras/text-watermark',
+    path: 'dist/extras/text-watermark.mjs',
+    limit: '1.5 KB',
+    brotli: true,
+  },
+  {
+    name: 'extras/image-watermark',
+    path: 'dist/extras/image-watermark.mjs',
+    limit: '1.5 KB',
+    brotli: true,
+  },
 ];

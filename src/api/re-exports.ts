@@ -45,7 +45,17 @@ export type {
 } from '../model';
 
 // --- primitives + autoscale seam (design 02 §12 / §13.4) ---------------------------
-export type { IPrimitive, PrimitiveSource, AxisLabel, AutoscaleInfo } from '../model';
+// The PUBLIC primitive shapes are owned by ./primitives (the lifecycle-bearing
+// IPrimitive + PrimitiveContext + ImageHandle, §12); AxisLabel/AutoscaleInfo/
+// PrimitiveSource keep their model field-level shapes, re-exported through there.
+export type {
+  IPrimitive,
+  PrimitiveContext,
+  PrimitiveSource,
+  AxisLabel,
+  AutoscaleInfo,
+  ImageHandle,
+} from './primitives';
 
 // --- the interaction router + gesture types (design 02 §13.5) ----------------------
 export type {
