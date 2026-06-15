@@ -8,6 +8,7 @@
     "tsBuildInfoFile": "../../.tsbuild/api.tsbuildinfo"
   },
   "include": ["**/*.ts"],
+  "files": ["../globals.d.ts"],
   "exclude": ["**/*.test.ts", "**/*.spec.ts"],
   "references": [
     { "path": "../core/tsconfig.composite.json" },

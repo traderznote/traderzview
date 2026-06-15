@@ -44,6 +44,15 @@ module.exports = {
       to: { path: '^src/', pathNot: ['^src/(api|extras)/', '^src/index\\.ts$'] },
     },
     {
+      name: 'backend-canvas-only-in-create-chart',
+      comment:
+        'Only api/create-chart.ts (the sole default-backend injection site) may import backend-canvas; ' +
+        'every other api file must stay backend-agnostic (architecture §3.1 / §8).',
+      severity: 'error',
+      from: { path: '^src/api/(?!create-chart\\.ts$)' },
+      to: { path: '^src/backend-canvas/' },
+    },
+    {
       name: 'no-deep-import',
       comment: 'Import another module only through its index.ts, never a deep file (architecture §3.2).',
       severity: 'error',

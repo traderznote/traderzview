@@ -1,0 +1,31 @@
+=== createChartWith (stub backend + fake container + fake rAF) ===
+  backend calls after create: 16
+
+=== addSeries(CandlestickSeries) → setData → render ===
+  surf0.beginFrame full
+  surf0.renderLayer base lists=1 cmds=3
+  surf0.renderLayer overlay lists=0 cmds=0
+  surf0.endFrame
+  surf2.beginFrame full
+  surf2.renderLayer base lists=0 cmds=0
+  surf2.renderLayer overlay lists=0 cmds=0
+  surf2.endFrame
+  surf3.beginFrame full
+  surf3.renderLayer base lists=0 cmds=0
+  surf3.renderLayer overlay lists=0 cmds=0
+  surf3.endFrame
+  surf5.beginFrame full
+  surf5.renderLayer base lists=0 cmds=0
+  surf5.renderLayer overlay lists=0 cmds=0
+  surf5.endFrame
+
+=== subscribeCrosshairMove ← setCrosshairPosition payload (§7/§14.2) ===
+  payload: time=2026-01-07 paneIndex=0 seriesData.size=1
+
+=== fitContent() ===
+  backend calls from fitContent: 16
+
+=== dispose() (idempotent; §16.5 disposed-guard) ===
+  surfaces disposed: 6
+
+demo-chart OK: createChartWith join → addSeries/setData drove a well-formed §6 backend stream; crosshair payload §14.2; dispose idempotent + guarded.
