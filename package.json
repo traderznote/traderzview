@@ -20,6 +20,7 @@
     "loc": "node scripts/loc-budget.mjs",
     "build": "node scripts/build.mjs",
     "size": "pnpm run build && size-limit",
+    "profiling:free": "node scripts/profiling-free.mjs",
     "test": "vitest run --passWithNoTests",
     "bench": "node scripts/bench.mjs",
     "conformance": "node scripts/conformance.mjs",
@@ -31,7 +32,8 @@
     "demo:model": "node scripts/demo-model.mjs",
     "demo:views": "node scripts/demo-views.mjs",
     "demo:host": "node scripts/demo-host.mjs",
-    "demo:chart": "node scripts/demo-chart.mjs"
+    "demo:chart": "node scripts/demo-chart.mjs",
+    "demo:bench": "node --expose-gc scripts/demo-bench.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.0",

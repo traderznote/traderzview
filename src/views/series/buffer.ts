@@ -9,6 +9,7 @@
 // asserted 0 after warm-up, perf §4.4.7). The `DisplayListBuilder` has the parallel
 // pooled-geometry discipline for command output.
 import { assert } from '../../core';
+import type { IFrameCounters } from '../../core';
 
 /** The reusable, growable columnar item buffer (architecture §6 — member shapes
  *  pinned there). `convert` fills `x`/`y`/`extra`; `emit`/`hitTest` read. `item(i)`
@@ -55,6 +56,14 @@ export class ReusableItemBuffer<Item> implements ItemBuffer<Item> {
   /** Buffer-realloc counter (perf §4.4.7): incremented on every backing-array grow.
    *  Asserted 0 after warm-up in steady scenarios. */
   reallocs = 0;
+  // The shared per-frame accumulator (perf §9.6). Set by the api under __TV_PROFILE__;
+  // every backing-array grow ++s bufferReallocs onto it. Strips out without the define.
+  #counters: IFrameCounters | undefined;
+
+  /** Wire the shared per-frame counters (perf §9.6; __TV_PROFILE__ only). */
+  setCounters(counters: IFrameCounters): void {
+    this.#counters = counters;
+  }
 
   constructor(laneStride: number, factory: ItemFactory<Item>, initialCapacity = INITIAL_CAPACITY) {
     if (__DEV__) assert(laneStride >= 0 && Number.isInteger(laneStride), 'laneStride must be a non-negative integer');
@@ -108,6 +117,7 @@ export class ReusableItemBuffer<Item> implements ItemBuffer<Item> {
     }
     this.#capacity = cap;
     this.reallocs++;
+    if (__TV_PROFILE__ && this.#counters !== undefined) this.#counters.bufferReallocs++;
   }
 
   item(i: number): Item {

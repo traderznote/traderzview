@@ -8,7 +8,7 @@
 // It also owns the off-grid key↔logical mapping (architecture §9.1 slot 2): the
 // ONLY APIs that address positions where no data exists.
 import { lowerBound, upperBound } from '../core';
-import type { HorzKey, Logical, TimeIndex } from '../core';
+import type { HorzKey, Logical, TimeIndex, IFrameCounters } from '../core';
 import type { StoreDiff, TimelineDiff } from './diffs';
 import type { HorzPoint, IHorzScaleBehavior } from './horz-behavior';
 
@@ -55,6 +55,14 @@ export class Timeline<TItem extends ItemWithTime = ItemWithTime, H = unknown, I 
   readonly #series = new Map<string, SeriesEntry>();
   // OR over series: how many series carry a REAL point at each slot.
   #realRefs: number[] = [];
+  // The shared per-frame accumulator (perf §9.6). Set by the api under __TV_PROFILE__;
+  // #rebuildUnion ++s timelineRebuilds (§4.4.4 — updateLast must leave it 0). Strips out.
+  #counters: IFrameCounters | undefined;
+
+  /** Wire the shared per-frame counters (perf §9.6; __TV_PROFILE__ only). */
+  setCounters(counters: IFrameCounters): void {
+    this.#counters = counters;
+  }
 
   constructor(behavior: IHorzScaleBehavior<H, I>) {
     this.#behavior = behavior;
@@ -247,6 +255,8 @@ export class Timeline<TItem extends ItemWithTime = ItemWithTime, H = unknown, I 
   }
 
   #rebuildUnion(internalByKey: Map<number, I>): void {
+    // perf §9.6/§4.4.4: a full union rebuild (the path updateLast must avoid). Strips out.
+    if (__TV_PROFILE__ && this.#counters !== undefined) this.#counters.timelineRebuilds++;
     // Merge every series' keys into one sorted, de-duplicated array.
     const set = new Set<number>();
     for (const entry of this.#series.values()) {

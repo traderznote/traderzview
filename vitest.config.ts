@@ -9,6 +9,10 @@ export default defineConfig({
   define: { __DEV__: 'true', __TV_PROFILE__: 'false' },
   test: {
     include: ['src/**/*.{test,spec}.ts'],
+    // The counter-propagation suite needs __TV_PROFILE__ = true (the LIVE guards), so it
+    // runs only under vitest.profile.config.ts; exclude it here where the define is false
+    // (its first assertion would otherwise fail by design).
+    exclude: ['node_modules/**', 'src/api/profiling.test.ts'],
     environment: 'node',
     passWithNoTests: true,
   },

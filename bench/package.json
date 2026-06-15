@@ -5,6 +5,15 @@
   "type": "module",
   "description": "traderzview benchmark & backend-conformance workspace — never published.",
   "scripts": {
-    "micro": "node micro/placeholder.mjs"
+    "structural": "node structural.mjs",
+    "scenarios-structural": "node scenarios/structural.mjs",
+    "scenarios-frametime": "node scenarios/frametime-smoke.mjs",
+    "scenarios-mem": "node --expose-gc scenarios/node-mem.mjs",
+    "goldens": "node micro/goldens.mjs",
+    "micro": "node micro/microbench.mjs",
+    "conformance": "node conformance/run.mjs",
+    "run": "node run.mjs",
+    "rebaseline": "node run.mjs --rebaseline",
+    "gates": "node structural.mjs && node scenarios/structural.mjs && node scenarios/frametime-smoke.mjs && node --expose-gc scenarios/node-mem.mjs && node micro/goldens.mjs"
   }
 }

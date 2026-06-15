@@ -2,6 +2,8 @@
   "$comment": "Hard CI LOC limits per module — dev-docs/design/01-architecture.md §11. Counted like the reference baseline: all .ts incl. comments & blanks, *.test.ts / *.spec.ts excluded. `total` is the derived sum of the budgets (asserted by scripts/loc-budget.mjs); never hand-edit it as a gate. Editing any per-module number requires a rationale line in the same PR (§11 speed bump).",
   "$rationale_views": "2026-06-14 (M7): views raised 2500→4000 (§11 speed-bump). The architecture §11 estimate of 2500 predated implementation and is infeasible for the realized M7 scope — six series renderers coded verbatim from study-06 §4.5–§4.11 (incl. candlestick 3-pass §4.10 + histogram column-geometry cache §4.11), shared line-base/bar-base, the PaneScene registry, the SeriesKind engine + decimate helper, four scene-source services (grid/crosshair/price-line/last-value-label), the ranked hit-test service, and axis-layout. Realized ≈3834 LOC; code-only (comments+blanks stripped) ≈2600 already exceeds 2500, so no comment-trimming can fit it without violating the spec-of-record citation discipline. ≈4000 reflects the natural size; M11 (parity hardening, which spans views) may warrant a further documented bump. Total recomputed 17950→19450.",
   "$rationale_api": "2026-06-15 (M9): api raised 2200→3100 (§11 speed-bump). The architecture §11 estimate of 2200 predated implementation and is infeasible for the realized M9 scope — the FULL design-02 §3.2 public surface plus the join point, across 13 files: six handle/facade modules (chart §7, series §8, time-scale §9, price-scale §10, pane §11, price-line §11.1 — each a thin map-through over the model/host with its chart-owned Port + the §16.5 disposed-guard), the §5–§6 options boundary (the four §5.3 normalizations + the three-layer defaults pipeline + §4.3 snapshots), the §14 event hubs, the §16 error taxonomy, the §13.1/§13.2 series definitions + defineSeries + time guards, the §3.2 engine/gfx/seam re-exports, and create-chart.ts — the createChartWith JOIN POINT that constructs model (M5) + views scene (M7) + host (M8), wires the Timeline+PlotStore+SeriesKind→PaneScene data pipeline + the six §2 cached-handle ports + the §14 hubs, and is the sole backend-canvas importer (§3.1). Realized ≈2959 LOC; the seven facade/options/events/errors files alone are ≈1894 and are fixed public surface. ≈3100 reflects the natural size with modest M10–M14 headroom. Total recomputed 19450→20350.",
+  "$rationale_host_m10": "2026-06-15 (M10 ph1): host raised 2000→2050 (§11 speed-bump). The perf §9.6 instrumentation contract is homed in host: host/profiling.ts (FrameStats + IPerfSink, the per-frame snapshot the IPerfSink stream carries), the FrameProfiler bundle + the scheduler's reset-at-frame-entry / read-at-endFrame FrameStats assembly (one field per §9.6 lane), the SurfaceHost replayMs bracket, and the ChartHost profiler threading. All of it is __TV_PROFILE__-guarded and byte-identical-stripped from the shipped build (verified by scripts/profiling-free.mjs, §3.3.1), so it costs 0 shipped bytes — but it is real source that counts against the LOC gate. Realized ≈2009; 2050 leaves ~40 for the M10 host-side bench wiring follow-ups (inputLagFrames source, §4.4.9). Total recomputed 20350→20450.",
+  "$rationale_api_m10": "2026-06-15 (M10 ph1): api raised 3100→3150 (§11 speed-bump). create-chart.ts gained the perf §9.6 wiring: ChartEnvironment's perfSink?/frameCounters? fields, the per-chart FrameCounters + FrameProfiler construction, and threading the one accumulator into the timeline + each series' PlotStore/ItemBuffer via setCounters — all __TV_PROFILE__-guarded (0 shipped bytes, §3.3.1). Realized ≈3107; 3150 leaves a small M10–M14 margin. Total recomputed 20350→20450 (combined with $rationale_host_m10).",
   "budgets": {
     "core": 600,
     "fmt": 250,
@@ -10,10 +12,10 @@
     "model": 4800,
     "views": 4000,
     "backend-canvas": 1300,
-    "host": 2000,
-    "api": 3100,
+    "host": 2050,
+    "api": 3150,
     "extras": 1800,
     "entries": 100
   },
-  "total": 20350
+  "total": 20450
 }

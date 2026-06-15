@@ -1,0 +1,16 @@
+=== S2 — crosshair sweep (R1, 120 moves): Overlay re-emit counters (perf §4.4.1) ===
+  painted frames: 121 (120 Overlay, 1 Render)
+  Overlay sourcesReEmitted (base bands): 0   [§4.4.1 base-only ⇒ 0]
+  Render  sourcesReEmitted (base bands): 4   [> 0 ⇒ the invariant is non-vacuous]
+  Overlay drawCommands (max):            0   [§4.4.3 Overlay ≤ 40]
+  cachedListIdentityViolations:          0   [§4.4.2 ⇒ 0]
+  S2: PASS (Overlay re-emits 0 base sources; Render re-emits 4).
+
+=== S12 — per-point memory attribution (R2-sized, perf §6.2): caps vs committed floor ===
+  3 series at the SAME 200,000 seeded timestamps (shared timeline pool after series A).
+  line   (Δ afterA→afterB): §6.2 cap 24 B/pt   SoA floor: 8 B lane + 4 B i32 index
+  candle (Δ afterB→afterC): §6.2 cap 48 B/pt   SoA floor: 4×8 B lanes + 4 B i32 index
+  slot   (Δ1−Δ2 derived)  : §6.2 cap 32 B/pt   SoA floor: shared timeline pool slot
+  S12: PASS (protocol well-formed; candle costs more than line; absolute B/pt gated by run.mjs).
+
+demo-bench OK: S2 Overlay base-only re-emit + S12 §6.2 attribution verified against the committed caps.

@@ -15,7 +15,7 @@ import type { ChartModel, UpdateMask } from '../model';
 type HostModel = Pick<ChartModel, 'panes'>;
 import { UpdateLevel, createMask } from '../model';
 import { computeLayout, type AxisWidths, type LayoutRects } from './layout';
-import { FrameLoop, type FrameDriver, type IFrameScheduler } from './frame-scheduler';
+import { FrameLoop, type FrameDriver, type FrameProfiler, type IFrameScheduler } from './frame-scheduler';
 import { InteractionRouter } from './input/router';
 import { GestureMachine, type GesturePointer } from './input/gestures';
 import type { GestureEvent, SurfaceKind } from './input/types';
@@ -100,6 +100,9 @@ export interface ChartHostDeps {
   readonly getDpr: () => number;
   /** 1-px pane-separator fill color for screenshots (study 01 §3.7). */
   readonly separatorColor?: string;
+  /** __TV_PROFILE__-only bench instrumentation (perf §9.6): the per-frame counters +
+   *  IPerfSink the frame loop resets/reads/emits. Undefined (and stripped) otherwise. */
+  readonly profiler?: FrameProfiler;
 }
 
 // One pane row's surface widgets + the separator above it (null for the first pane).
@@ -135,7 +138,7 @@ export class ChartHost implements FrameDriver {
     this.#root = deps.elements.root();
     const s = this.#root.style;
     s.position = 'relative';
-    this.#loop = new FrameLoop(deps.scheduler, this);
+    this.#loop = new FrameLoop(deps.scheduler, this, __TV_PROFILE__ ? deps.profiler : undefined);
     this.#buildTree();
     registerDefaultBehaviors(this.#router, this.#behaviorPorts());
   }
@@ -316,7 +319,13 @@ export class ChartHost implements FrameDriver {
 
   #mkSurface(mount: HostElement, config: SurfaceConfig, paneIndex: number): SurfaceHost {
     this.#root.appendChild(mount);
-    const sh = new SurfaceHost(mount, this.#deps.backend, config, this.#onResolutionChange);
+    const sh = new SurfaceHost(
+      mount,
+      this.#deps.backend,
+      config,
+      this.#onResolutionChange,
+      __TV_PROFILE__ ? this.#deps.profiler : undefined,
+    );
     // One gesture machine per interactive surface (the recognizer that feeds the router).
     const machine = new GestureMachine(
       { surface: config.kind, paneIndex },

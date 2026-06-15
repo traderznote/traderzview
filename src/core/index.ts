@@ -22,4 +22,5 @@ export type {
   Size,
   Rect,
 } from './brands';
+export { createFrameCounters, FrameCounters } from './profiling';
 export type { IFrameCounters } from './profiling';

@@ -10,6 +10,7 @@ import type { PaneScene } from '../views';
 import type { SurfaceKind } from './input/types';
 import type { UpdateLevel } from '../model';
 import { UpdateLevel as Level } from '../model';
+import type { FrameProfiler } from './frame-scheduler';
 
 /** The few mount-element members the host touches — `HTMLElement` satisfies it, and
  *  a headless test passes a fake that records style writes (no real DOM). */
@@ -44,13 +45,25 @@ export class SurfaceHost {
   readonly #surface: ISurface;
   readonly #scene: PaneScene;
   readonly #resCancel: Unsubscribe;
+  readonly #prof: FrameProfiler | undefined; // __TV_PROFILE__-only replayMs bracket
   #rect: Rect = { x: 0, y: 0, width: 0, height: 0 };
   #visible = false;
 
-  constructor(mount: HostElement, factory: SurfaceFactory, config: SurfaceConfig, onResolutionChange: () => void) {
+  constructor(
+    mount: HostElement,
+    factory: SurfaceFactory,
+    config: SurfaceConfig,
+    onResolutionChange: () => void,
+    prof?: FrameProfiler,
+  ) {
     this.#mount = mount;
     this.#scene = config.scene;
     this.kind = config.kind;
+    this.#prof = prof;
+    // Wire the per-frame counters into the scene so its composite ++s the view lanes
+    // (sourcesReEmitted/sourcesCached/displayLists/drawCommands + the §4.4.2 identity
+    // violation). Stripped without the define (perf §9.6 / §3.3.1).
+    if (__TV_PROFILE__ && prof !== undefined) this.#scene.setCounters(prof.counters);
     const s = mount.style;
     s.position = 'absolute';
     this.#surface = factory.createSurface(mount);
@@ -104,7 +117,17 @@ export class SurfaceHost {
   }
 
   #render(layer: LayerId, frame: ViewFrame): void {
-    this.#surface.renderLayer(layer, this.#scene.composite(layer, frame));
+    const lists = this.#scene.composite(layer, frame);
+    // perf §9.6: the renderLayer body is the backend "replay"; bracket it from here
+    // (the host owns the wall clock) and add to the shared replayMs lane (§4.2 backend
+    // share). Strips out without the define.
+    if (__TV_PROFILE__ && this.#prof !== undefined) {
+      const r0 = this.#prof.now();
+      this.#surface.renderLayer(layer, lists);
+      this.#prof.counters.replayMs += this.#prof.now() - r0;
+      return;
+    }
+    this.#surface.renderLayer(layer, lists);
   }
 
   /** A snapshot of the current pixels (screenshot single pass, §7). */

@@ -21,6 +21,7 @@
 // (study 01 §4.8): the hovered owner's `Series`-band sources sort last (drawn on
 // top) without mutating registration order.
 import { assert } from '../../core';
+import type { IFrameCounters } from '../../core';
 import { ZBand } from '../../gfx';
 import type { DisplayList, LayerId, SceneSource, ViewFrame } from '../../gfx';
 
@@ -66,6 +67,15 @@ export class PaneScene {
   /** Zero-tolerance: a source that did NOT re-emit yet returned a different array
    *  than its cache (impossible if it caches correctly). Counted in dev only. */
   identityViolations = 0;
+  // The shared per-frame accumulator (perf §9.6). Set by the host under __TV_PROFILE__;
+  // composite() ++s the view lanes onto it so the host reads them at endFrame. Stays
+  // undefined (and every ++ strips out) without the define.
+  #counters: IFrameCounters | undefined;
+
+  /** Wire the shared per-frame counters (perf §9.6; host-set, __TV_PROFILE__ only). */
+  setCounters(counters: IFrameCounters): void {
+    this.#counters = counters;
+  }
 
   /** Register a scene source with its ordering metadata. Returns a handle (the
    *  entry index) callers keep for `unregister`. Attach order is recorded as the
@@ -125,9 +135,20 @@ export class PaneScene {
       // Re-emit detection by ARRAY IDENTITY (perf §4.4.2). A changed reference means
       // the source rebuilt its lists this frame (first emit included); an unchanged
       // reference is a clean source whose cached array we reuse verbatim.
-      if (lists !== e.cachedLists) {
+      const reEmitted = lists !== e.cachedLists;
+      if (reEmitted) {
         this.sourcesReEmitted++;
         e.cachedLists = lists;
+      }
+      // perf §9.6 view lanes: a dirty re-emit bumps sourcesReEmitted; a clean source
+      // returning its cached array bumps sourcesCached; both contribute their lists +
+      // commands to displayLists/drawCommands. Strips out without the define.
+      if (__TV_PROFILE__ && this.#counters !== undefined) {
+        const c = this.#counters;
+        if (reEmitted) c.sourcesReEmitted++;
+        else c.sourcesCached++;
+        c.displayLists += lists.length;
+        for (let j = 0; j < lists.length; j++) c.drawCommands += lists[j]!.commands.length;
       }
       for (let j = 0; j < lists.length; j++) this.#out.push(lists[j]!);
     }
@@ -163,6 +184,7 @@ export class PaneScene {
     const ok = now === before;
     if (!ok) {
       this.identityViolations++;
+      if (__TV_PROFILE__ && this.#counters !== undefined) this.#counters.cachedListIdentityViolations++;
       if (__DEV__) assert(ok, 'clean source returned a non-identical display-list array (perf §4.4.2)');
     }
     return ok;

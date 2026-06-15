@@ -1,0 +1,31 @@
+{
+  "$comment": "Committed drift baselines (perf §9.5). PRs compare measured medians against these: warn > 10%, fail > driftFailPct (default 20). Each scenario's keys are `<FrameStats-lane>:<aggregate>` for 'frame' gates and `<metric>:min` for 'probe' gates (perf §9.6). Values are null until the PINNED CI runner (bench/run.mjs at 4x throttle, median-of-5) records them via `npm run bench:rebaseline`; this skeleton is the reviewed structure (perf §9.5: baselines updated only by a dedicated reviewed PR, never silently alongside a feature). The EXACT structural gates (aggregate `exact`, perf §4.4) and the design-intent smoke (S17, non-gating) carry no drift baseline — they are hard counts / reported-only, so they are intentionally absent here.",
+  "runner": {
+    "throttleRate": 4,
+    "deviceScaleFactor": 2,
+    "warmupDrop": 10,
+    "scenarioRuns": 5,
+    "aggregateP95": true,
+    "browser": "chromium",
+    "note": "Pin the exact Chromium + runner class in the CI workflow (perf §4.3 / doc 06)."
+  },
+  "scenarios": {
+    "S1": { "wallMs:max": null },
+    "S2": { "totalMs:p95": null, "heapPerFrameBytes:min": null },
+    "S2b": { "totalMs:p95": null, "heapPerFrameBytes:min": null },
+    "S3": { "totalMs:p95": null, "heapPerFrameBytes:min": null },
+    "S4": { "totalMs:p95": null, "heapPerFrameBytes:min": null },
+    "S5": { "totalMs:p95": null, "layoutMs:sum": null, "heapPerFrameBytes:min": null },
+    "S6": { "wallMs:max": null },
+    "S7": { "wallMs:max": null },
+    "S8": { "totalMs:p95": null, "drawCommands:max": null },
+    "S9": { "totalMs:p95": null },
+    "S10": { "totalMs:p95": null, "heapPerFrameBytes:min": null },
+    "S11": { "totalMs:p95": null },
+    "S12": { "bytesPerPoint:min": null },
+    "S13": { "totalMs:p95": null, "heapPerFrameBytes:min": null },
+    "S14": { "totalMs:p95": null, "heapPerFrameBytes:min": null },
+    "S15": { "totalMs:p95": null },
+    "S16": { "totalMs:p95": null, "drawCommands:max": null, "layoutMs:sum": null }
+  }
+}

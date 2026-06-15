@@ -4,7 +4,7 @@
 // autoscale (study 10 §4.3). Readers go through role accessors and never branch on
 // lane count. PlotStoreView is the read-only face (re-exported to indicators, §9.2).
 import { lowerBound } from '../core';
-import type { TimeIndex } from '../core';
+import type { TimeIndex, IFrameCounters } from '../core';
 import type { StoreDiff } from './diffs';
 import type { SeriesDataContract } from './series-contract';
 
@@ -33,6 +33,14 @@ export class PlotStore<TItem = unknown> implements PlotStoreView {
   #length = 0;
   #chunkMin: number[] = [];
   #chunkMax: number[] = [];
+  // The shared per-frame accumulator (perf §9.6). Set by the api under __TV_PROFILE__;
+  // #buildChunksFrom ++s chunkRecomputes by the chunks it rebuilds (§4.4.4). Strips out.
+  #counters: IFrameCounters | undefined;
+
+  /** Wire the shared per-frame counters (perf §9.6; __TV_PROFILE__ only). */
+  setCounters(counters: IFrameCounters): void {
+    this.#counters = counters;
+  }
 
   constructor(contract: SeriesDataContract<TItem>) {
     this.#contract = contract;
@@ -98,6 +106,9 @@ export class PlotStore<TItem = unknown> implements PlotStoreView {
     this.#chunkMax.length = chunks;
     const minLane = this.#lanes[this.#roleMin];
     const maxLane = this.#lanes[this.#roleMax];
+    // perf §9.6/§4.4.4: count the chunks this rebuild touches (a live append recomputes
+    // only the boundary chunk ⇒ ≤ 1/tick). Strips out without the define.
+    if (__TV_PROFILE__ && this.#counters !== undefined) this.#counters.chunkRecomputes += Math.max(0, chunks - firstChunk);
     for (let c = firstChunk; c < chunks; c++) {
       const lo = c * CHUNK;
       const hi = Math.min(lo + CHUNK, this.#length);

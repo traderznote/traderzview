@@ -5,8 +5,9 @@
 // Overlay-ticket re-arm that never promotes, and a synchronous resize/screenshot
 // flush. Owns no DOM and no concrete backend — the frame work is INJECTED via
 // FrameDriver; the backend reaches it only through the driver.
-import { assert, type Unsubscribe } from '../core';
+import { assert, type Unsubscribe, type IFrameCounters } from '../core';
 import { UpdateLevel, type UpdateMask, createMask, emptyMask, mergeMasks } from '../model';
+import type { FrameStats, IPerfSink } from './profiling';
 
 // ---------------------------------------------------------------------------
 // IFrameScheduler (public-api §13.6) — the injectable rAF loop. One underlying
@@ -107,6 +108,25 @@ export interface FrameDriver {
 const LAYOUT_CAP = 2; // architecture §4.4 / study 05 IMPROVE: layout-until-stable cap.
 
 // ---------------------------------------------------------------------------
+// FrameProfiler — the __TV_PROFILE__-only bench bundle the host threads into the
+// loop (perf §9.6). `counters` is the one per-chart IFrameCounters the producing
+// layers ++ during the frame; the loop reset()s it at frame entry (step 2) and
+// READS it at endFrame (step 4). `sink` receives one FrameStats per painted frame.
+// `now()` is a monotonic wall clock (performance.now) for the *Ms brackets — kept
+// separate from the frame-epoch `now` the driver paints with. The whole bundle and
+// every use of it strips to 0 bytes without the define (perf §3.3.1).
+// ---------------------------------------------------------------------------
+
+export interface FrameProfiler {
+  readonly counters: IFrameCounters;
+  readonly sink: IPerfSink;
+  now(): number;
+  /** rAF periods from the most recent unconsumed input event to a paint (§4.4.9);
+   *  0 when no input drove this frame. Supplied by the host input pipeline. */
+  inputLagFrames(): number;
+}
+
+// ---------------------------------------------------------------------------
 // FrameLoop — the single-pending-mask, single-rAF per-chart loop (architecture
 // §4.4). Invalidations within one event-loop turn coalesce into ONE frame.
 // ---------------------------------------------------------------------------
@@ -114,14 +134,16 @@ const LAYOUT_CAP = 2; // architecture §4.4 / study 05 IMPROVE: layout-until-sta
 export class FrameLoop {
   readonly #scheduler: IFrameScheduler;
   readonly #driver: FrameDriver;
+  readonly #prof: FrameProfiler | undefined; // __TV_PROFILE__-only; undefined otherwise
   #pending: UpdateMask = emptyMask();
   #cancel: Unsubscribe | null = null; // the one pending scheduler callback
   #inFrame = false; // true while frame() runs — re-entrant masks coalesce, don't re-arm
   #disposed = false;
 
-  constructor(scheduler: IFrameScheduler, driver: FrameDriver) {
+  constructor(scheduler: IFrameScheduler, driver: FrameDriver, prof?: FrameProfiler) {
     this.#scheduler = scheduler;
     this.#driver = driver;
+    this.#prof = prof;
   }
 
   /** Merge an UpdateMask into the single pending mask and arm one rAF if needed
@@ -156,16 +178,33 @@ export class FrameLoop {
     this.#pending = emptyMask();
     if (work.level === UpdateLevel.None) return;
 
+    // perf §9.6 step 2: the FIRST thing a frame does is reset the per-frame counters,
+    // so every lane starts at 0 and a frame that skips a layer leaves its lanes 0 (the
+    // exact-count gates of §4.4 rely on this). All bracketing strips out without the define.
+    let t0 = 0;
+    let layoutMs = 0;
+    let modelMs = 0;
+    if (__TV_PROFILE__ && this.#prof !== undefined) {
+      this.#prof.counters.reset();
+      t0 = this.#prof.now();
+    }
+
     this.#inFrame = true;
     try {
       for (let i = 0; i < LAYOUT_CAP; i++) {
         if (work.level === UpdateLevel.Layout) {
+          let ls = 0;
+          if (__TV_PROFILE__ && this.#prof !== undefined) ls = this.#prof.now();
           this.#driver.syncWidgets();
           this.#driver.computeLayout();
           this.#driver.applySizes();
+          if (__TV_PROFILE__ && this.#prof !== undefined) layoutMs += this.#prof.now() - ls;
         }
         if (work.level >= UpdateLevel.Render) {
+          let ms = 0;
+          if (__TV_PROFILE__ && this.#prof !== undefined) ms = this.#prof.now();
           this.#driver.applyRender(work, now);
+          if (__TV_PROFILE__ && this.#prof !== undefined) modelMs += this.#prof.now() - ms;
         }
         // A mask that arrived during the steps above (e.g. axis width grew →
         // Layout) merges in and the loop re-runs — capped at 2 iterations.
@@ -173,7 +212,37 @@ export class FrameLoop {
         work = mergeMasks(work, this.#pending);
         this.#pending = emptyMask();
       }
+      let ps = 0;
+      if (__TV_PROFILE__ && this.#prof !== undefined) ps = this.#prof.now();
       this.#driver.paint(work.level, now);
+      // perf §9.6 step 4: after paint completes (the backend's endFrame ran inside
+      // paint), the host READS the accumulator + its own *Ms brackets into one
+      // FrameStats and emits it. emit = paint wall minus replayMs (the backend lane),
+      // so emitMs and replayMs are disjoint (§4.2 backend-share gate).
+      if (__TV_PROFILE__ && this.#prof !== undefined) {
+        const c = this.#prof.counters;
+        const tEnd = this.#prof.now();
+        const emitMs = Math.max(0, tEnd - ps - c.replayMs);
+        const stats: FrameStats = {
+          level: work.level,
+          totalMs: tEnd - t0,
+          layoutMs,
+          modelMs,
+          emitMs,
+          replayMs: c.replayMs,
+          sourcesUpdated: c.sourcesReEmitted + c.sourcesCached,
+          sourcesReEmitted: c.sourcesReEmitted,
+          sourcesCached: c.sourcesCached,
+          displayLists: c.displayLists,
+          drawCommands: c.drawCommands,
+          bufferReallocs: c.bufferReallocs,
+          timelineRebuilds: c.timelineRebuilds,
+          chunkRecomputes: c.chunkRecomputes,
+          cachedListIdentityViolations: c.cachedListIdentityViolations,
+          inputLagFrames: this.#prof.inputLagFrames(),
+        };
+        this.#prof.sink.onFrame(stats);
+      }
     } finally {
       this.#inFrame = false;
     }

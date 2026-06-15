@@ -1,0 +1,204 @@
+{
+  "wheel": {
+    "default": [
+      {
+        "name": "pixel dy=100",
+        "out": {
+          "scroll": 0,
+          "zoom": -1,
+          "ctrlKey": false
+        }
+      },
+      {
+        "name": "line dy=3",
+        "out": {
+          "scroll": 0,
+          "zoom": -0.96,
+          "ctrlKey": false
+        }
+      },
+      {
+        "name": "page dy=1",
+        "out": {
+          "scroll": 0,
+          "zoom": -1,
+          "ctrlKey": false
+        }
+      },
+      {
+        "name": "pixel dx=120",
+        "out": {
+          "scroll": -96,
+          "zoom": 0,
+          "ctrlKey": false
+        }
+      },
+      {
+        "name": "pixel dy=-50 ctrl",
+        "out": {
+          "scroll": 0,
+          "zoom": 0.5,
+          "ctrlKey": true
+        }
+      },
+      {
+        "name": "line dy=10 (zoom clamp)",
+        "out": {
+          "scroll": 0,
+          "zoom": -1,
+          "ctrlKey": false
+        }
+      }
+    ],
+    "speed2": [
+      {
+        "name": "pixel dy=100",
+        "out": {
+          "scroll": 0,
+          "zoom": -1,
+          "ctrlKey": false
+        }
+      },
+      {
+        "name": "line dy=3",
+        "out": {
+          "scroll": 0,
+          "zoom": -1,
+          "ctrlKey": false
+        }
+      },
+      {
+        "name": "page dy=1",
+        "out": {
+          "scroll": 0,
+          "zoom": -1,
+          "ctrlKey": false
+        }
+      },
+      {
+        "name": "pixel dx=120",
+        "out": {
+          "scroll": -192,
+          "zoom": 0,
+          "ctrlKey": false
+        }
+      },
+      {
+        "name": "pixel dy=-50 ctrl",
+        "out": {
+          "scroll": 0,
+          "zoom": 1,
+          "ctrlKey": true
+        }
+      },
+      {
+        "name": "line dy=10 (zoom clamp)",
+        "out": {
+          "scroll": 0,
+          "zoom": -1,
+          "ctrlKey": false
+        }
+      }
+    ],
+    "winChromeDpr2": [
+      {
+        "name": "pixel dy=100",
+        "out": {
+          "scroll": 0,
+          "zoom": -0.5,
+          "ctrlKey": false
+        }
+      },
+      {
+        "name": "line dy=3",
+        "out": {
+          "scroll": 0,
+          "zoom": -0.96,
+          "ctrlKey": false
+        }
+      },
+      {
+        "name": "page dy=1",
+        "out": {
+          "scroll": 0,
+          "zoom": -1,
+          "ctrlKey": false
+        }
+      },
+      {
+        "name": "pixel dx=120",
+        "out": {
+          "scroll": -48,
+          "zoom": 0,
+          "ctrlKey": false
+        }
+      },
+      {
+        "name": "pixel dy=-50 ctrl",
+        "out": {
+          "scroll": 0,
+          "zoom": 0.25,
+          "ctrlKey": true
+        }
+      },
+      {
+        "name": "line dy=10 (zoom clamp)",
+        "out": {
+          "scroll": 0,
+          "zoom": -1,
+          "ctrlKey": false
+        }
+      }
+    ]
+  },
+  "kinetic": [
+    {
+      "barSpacing": 6,
+      "velocity": 0.5,
+      "epsilon": 0.16666666666666666,
+      "pos0": 0,
+      "pos100": 43.187711986701736,
+      "pos500": 129.36761333905042,
+      "rest": 166.24987481214285,
+      "finished0": false,
+      "finished500": false,
+      "finishedRest": true
+    },
+    {
+      "barSpacing": 12,
+      "velocity": 0.5,
+      "epsilon": 0.08333333333333333,
+      "pos0": 0,
+      "pos100": 43.187711986701736,
+      "pos500": 129.36761333905042,
+      "rest": 166.3332081454762,
+      "finished0": false,
+      "finished500": false,
+      "finishedRest": true
+    },
+    {
+      "barSpacing": 6,
+      "velocity": 2,
+      "epsilon": 0.16666666666666666,
+      "pos0": 0,
+      "pos100": 172.75084794680694,
+      "pos500": 517.4704533562017,
+      "rest": 665.4994992485714,
+      "finished0": false,
+      "finished500": false,
+      "finishedRest": true
+    },
+    {
+      "barSpacing": 50,
+      "velocity": 0.3,
+      "epsilon": 0.02,
+      "pos0": 0,
+      "pos100": 25.91262719202104,
+      "pos500": 77.62056800343024,
+      "rest": 99.8299248872857,
+      "finished0": false,
+      "finished500": false,
+      "finishedRest": true
+    }
+  ]
+}

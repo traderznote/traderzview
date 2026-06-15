@@ -6,7 +6,10 @@
 
 // --- frame scheduler: IFrameScheduler rAF loop + per-chart FrameLoop (§4.4) ------
 export { createRafScheduler, FrameLoop } from './frame-scheduler';
-export type { IFrameScheduler, FrameCallback, RafEnv, FrameDriver } from './frame-scheduler';
+export type { IFrameScheduler, FrameCallback, RafEnv, FrameDriver, FrameProfiler } from './frame-scheduler';
+
+// --- bench profiling: FrameStats / IPerfSink (perf §9.6; __TV_PROFILE__ only) -----
+export type { FrameStats, IPerfSink } from './profiling';
 
 // --- pure Hi-DPI layout (design 01 §7 / study 10 §3.1) ---------------------------
 export { computeLayout } from './layout';

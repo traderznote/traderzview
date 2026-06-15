@@ -1,0 +1,23 @@
+{
+  "$comment": "Type-check-only config for the bench workspace's TS (gates.ts, scenarios.ts, browser/driver.ts). The bench package is NOT in the verify solution (tsconfig.verify.json) or the src LOC budget — its TS is bundled by esbuild at runtime (the bench/conformance pattern), so this config exists solely for `tsc --noEmit -p bench/tsconfig.check.json` to type-check the bench surface against ../src without joining the composite build (no .tsbuild race). DOM lib is on because browser/driver.ts is the in-page runner driver; the ambient __DEV__/__TV_PROFILE__ globals come from ../src/globals.d.ts.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "moduleDetection": "force",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "erasableSyntaxOnly": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "allowJs": true,
+    "checkJs": false,
+    "types": []
+  },
+  "include": ["gates.ts", "scenarios.ts", "scenarios/**/*.ts", "browser/driver.ts", "micro/cases.ts"],
+  "files": ["../src/globals.d.ts"]
+}
