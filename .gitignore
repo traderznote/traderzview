@@ -17,6 +17,10 @@ coverage/
 test-results/
 playwright-report/
 playwright/.cache/
+.playwright-mcp/
+
+# Local preview / debug artifacts (browser-driven snapshots; not part of the library)
+/*.png
 
 # Logs
 *.log
