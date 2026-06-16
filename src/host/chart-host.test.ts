@@ -127,7 +127,7 @@ function cfg(kind: SurfaceConfig['kind']): SurfaceConfig {
 // --- a recording hooks object ------------------------------------------------------
 function fakeHooks(panes: number, axes: { left: number; right: number }, taH: number): ChartHostHooks & { calls: Record<string, number> } {
   const calls: Record<string, number> = {
-    syncWidgets: 0, applyRender: 0, applyHover: 0, clearHover: 0, pan: 0, zoom: 0, resetPane: 0, priceAxisDrag: 0,
+    syncWidgets: 0, applyRender: 0, applyHover: 0, clearHover: 0, pan: 0, zoom: 0, resetPane: 0, priceAxisDrag: 0, priceScroll: 0,
   };
   const paneConfigs: PaneSurfaceConfigs[] = [];
   for (let i = 0; i < panes; i++) paneConfigs.push({ pane: cfg('pane'), leftAxis: cfg('price-axis'), rightAxis: cfg('price-axis') });
@@ -151,6 +151,7 @@ function fakeHooks(panes: number, axes: { left: number; right: number }, taH: nu
     zoom: () => { calls.zoom++; },
     resetPane: () => { calls.resetPane++; },
     priceAxisDrag: () => { calls.priceAxisDrag++; },
+    priceScroll: () => { calls.priceScroll++; },
   };
 }
 

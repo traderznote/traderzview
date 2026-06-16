@@ -174,7 +174,7 @@ export function render() {
 
   // === 5. gesture drag → InteractionRouter → default PAN behavior intents =============
   lines.push('');
-  lines.push('=== Drag gesture → router → default pan/clearHover intents ===');
+  lines.push('=== Drag gesture → router → default pan + price-scroll/clearHover intents ===');
   const router = new InteractionRouter();
   const intents = [];
   registerDefaultBehaviors(router, {
@@ -182,20 +182,22 @@ export function render() {
     zoom: (step, atX) => intents.push('zoom ' + step + ' @' + atX),
     resetPane: (i) => intents.push('resetPane ' + i),
     priceAxisDrag: (i, dy, axis) => intents.push('axisDrag ' + i + ' ' + dy + ' ' + axis),
+    priceScroll: (i, dy) => intents.push('priceScroll ' + i + ' ' + dy),
     clearHover: () => intents.push('clearHover'),
   });
   let t = 0;
   const machine = new GestureMachine({ surface: 'pane', paneIndex: 0 }, () => t, (e) => router.dispatch(e));
   const ptr = (x, y, buttons) => ({ pointerId: 1, clientX: x, clientY: y, buttons, pointerType: 'mouse', ctrlKey: false, altKey: false, shiftKey: false, metaKey: false });
-  // press, move past the 5-px drag slop (study 07 §4.1) → drag start; two more moves; up.
+  // press, move past the 5-px drag slop (study 07 §4.1) → drag start; two diagonal moves; up.
+  // A pane-body drag pans the time scale by Δx AND scrolls the price scale by Δy (TV parity).
   machine.pointerDown(ptr(100, 100, 1));
   machine.pointerMove(ptr(110, 100, 1)); // |Δ|=10 ≥ 5 slop → drag 'start' (clearHover, no pan yet)
-  machine.pointerMove(ptr(130, 100, 1)); // 'move' Δx=+20 → pan(20)
-  machine.pointerMove(ptr(125, 100, 1)); // 'move' Δx=−5  → pan(−5)
-  machine.pointerUp(ptr(125, 100, 1));   // 'end' (no pan)
+  machine.pointerMove(ptr(130, 90, 1));  // 'move' Δ=(+20,−10) → pan(20) + priceScroll(0,−10)
+  machine.pointerMove(ptr(125, 95, 1));  // 'move' Δ=(−5,+5)  → pan(−5) + priceScroll(0,5)
+  machine.pointerUp(ptr(125, 95, 1));    // 'end' (no pan)
   for (const i of intents) lines.push('  ' + i);
-  // start fires clearHover (a pan hides the crosshair); each subsequent move pans by Δx.
-  assertSeq(intents, ['clearHover', 'pan 20', 'pan -5']);
+  // start fires clearHover (a pan hides the crosshair); each move pans by Δx and scrolls by Δy.
+  assertSeq(intents, ['clearHover', 'pan 20', 'priceScroll 0 -10', 'pan -5', 'priceScroll 0 5']);
 
   // === 6. wheel normalization → router → default ZOOM intent (study 10 §4.4) ==========
   lines.push('');

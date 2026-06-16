@@ -6,7 +6,7 @@
 // glue between the headless model/views and the DOM host: the data pipeline (Timeline +
 // PlotStore + SeriesKind → PaneScene SceneSource), the §2 cached-handle ports, and the
 // §14 event hubs the host pointer pipeline fires.
-import type { Coordinate, DeepPartial, HorzKey, IFrameCounters, Logical } from '../core';
+import type { Coordinate, DeepPartial, HorzKey, IFrameCounters, Logical, TimeIndex } from '../core';
 import { createFrameCounters } from '../core';
 import type { DisplayList, FontSpec, IRenderBackend, ITextMeasurer, SceneSource, ViewFrame } from '../gfx';
 import { DisplayListBuilder, ZBand } from '../gfx';
@@ -14,6 +14,7 @@ import { PlotStore, Timeline, timeBehavior } from '../data';
 import type { IHorzScaleBehavior, PlotStoreView, Time } from '../data';
 import {
   ChartModel,
+  Crosshair,
   PriceScaleMode,
   Series as ModelSeries,
   UpdateLevel,
@@ -44,7 +45,7 @@ import type {
   MeasuredAxes,
   PaneSurfaceConfigs,
 } from '../host';
-import { PaneScene, PrimitiveBinding, itemWindow, createPriceLineSource, createGridSource, createLastValueLabelSource } from '../views';
+import { PaneScene, PrimitiveBinding, itemWindow, createPriceLineSource, createGridSource, createLastValueLabelSource, createCrosshairSource } from '../views';
 import type {
   ItemBuffer,
   LastValueLabelState,
@@ -238,6 +239,11 @@ export function createChartWith<H = Time>(
   const primarySeries = new Map<Pane, { model: ModelSeries; store: PlotStoreView }>();
   const panesWithFurniture = new Set<Pane>();
 
+  // The chart's ONE crosshair model (study 07): the host's applyHover sets its position from
+  // the live pointer; a per-pane crosshair SceneSource (band Crosshair, overlay) renders the
+  // vertical + horizontal dashed lines that track the cursor.
+  const crosshair = new Crosshair();
+
   /**
    * Wire the axis furniture for a pane ONCE into its STABLE scenes (idempotent). The grid
    * goes to the PANE scene (band Grid, below the series); the price-tick labels + the
@@ -307,6 +313,11 @@ export function createChartWith<H = Time>(
       displayLists: () => gridSource.displayLists(),
     };
     sceneFor(pane).register(gridFeed, { ownerZ: -1, ownerId: -1 });
+
+    // CROSSHAIR (band Crosshair, overlay) → the pane scene: the vertical + horizontal dashed
+    // lines that track the pointer, read from the shared crosshair model (host applyHover drives
+    // it). Repaints on the cheap Overlay frame the host arms when the hover position changes.
+    sceneFor(pane).register(createCrosshairSource(crosshair), { ownerZ: -1, ownerId: -1 });
 
     // 2) PRICE AXIS (right) → the right-axis scene (band Labels): the price TICK LABELS,
     //    right-aligned inside RIGHT_AXIS_WIDTH (api-side emit via DisplayListBuilder), + the
@@ -424,6 +435,7 @@ export function createChartWith<H = Time>(
     leftAxisSceneFor,
     timeAxisScene,
     nav,
+    crosshair,
     env?.scheduler,
     profiler,
     markInput,
@@ -816,6 +828,20 @@ function wireSeries<H>(
     hitTest: (x: Coordinate, y: Coordinate) => kind.hitTest(buffer, x, y),
   };
   scene.register(source, { ownerZ, ownerId });
+
+  // §4.13 the LAST-VALUE PRICE LINE: a thin dashed horizontal line across the pane at the
+  // series' last close — the in-pane companion to the axis pill. Maps the last value through
+  // the SAME per-frame converter the series rendered with (lastPrice); a null y (no data / no
+  // converter yet) hides it. Band AboveSeries (base layer), like the user price lines.
+  const lastValueLineSource = createPriceLineSource(
+    (): PriceLineState => {
+      const lv = modelSeries.lastValue();
+      const y = lv !== null && lastPrice !== null ? lastPrice.priceToCoordinate(lv.price) : null;
+      return { y: y !== null && Number.isFinite(y) ? y : null, barColor: modelSeries.priceLineColor(), text: '' };
+    },
+    { lineWidth: 1 },
+  );
+  scene.register(lastValueLineSource, { ownerZ, ownerId });
   const paneSeries = { kind: () => modelSeries.kind() }; // the model PaneSeries (removeSeries drops it)
 
   const setData = (next: readonly unknown[]): void => {
@@ -966,6 +992,7 @@ function wireSeries<H>(
   const disposeExtras = (): void => {
     for (const e of priceLineEntries) scene.unregister(e.source);
     priceLineEntries.clear();
+    scene.unregister(lastValueLineSource); // §4.13 the last-value price line
     lineToEntry.clear();
   };
   return { model: modelSeries, handle, pane, scene, store: store as PlotStoreView, source, paneSeries, disposeExtras };
@@ -1628,6 +1655,24 @@ function drivePriceAxisDrag<H>(
   navp.endScale();
 }
 
+/** Scroll a pane's price scale from a pane-body vertical drag (TradingView parity). The
+ *  navigator's scroll refuses while autoscaling (study 04 §3.4), so the first vertical move
+ *  pins autoScale OFF — the grid then stops re-seeding the range and the navigator's last
+ *  autoscaled range becomes the snapshot we shift. Frames a unit start→scrollTo→end per move
+ *  (the per-frame seeded band height makes the px→price shift exact). The right scale is the
+ *  pane's price axis; a left-only pane would need the left id (single-axis default here). */
+function drivePriceScroll<H>(model: ChartModel<H>, paneIndex: number, deltaYpx: number): void {
+  if (deltaYpx === 0) return;
+  const pane = model.panes().panes()[paneIndex];
+  const scale = pane?.priceScale('right') ?? null;
+  if (scale === null || scale.range() === null) return; // no scale / not yet seeded
+  if (scale.isAutoScale()) scale.setAutoScale(false); // a vertical drag pins the scale (§3.4)
+  const navp = scale.navigator();
+  navp.startScroll(0);
+  navp.scrollTo(deltaYpx);
+  navp.endScroll();
+}
+
 // --- building the host (M8) over the injected backend ------------------------------
 
 function buildHost<H>(
@@ -1639,6 +1684,7 @@ function buildHost<H>(
   leftAxisSceneFor: (pane: Pane) => PaneScene,
   timeAxisScene: PaneScene,
   nav: LiveNav,
+  crosshair: Crosshair,
   schedulerOverride?: IFrameScheduler,
   profiler?: FrameProfiler,
   markInput: () => void = () => {},
@@ -1658,6 +1704,12 @@ function buildHost<H>(
     surfaceMount: () => doc.createElement('div') as unknown as HostElement,
     separator: () => doc.createElement('div') as unknown as HostElement,
   };
+
+  // The last applied hover coords, so applyHover only arms an Overlay frame on real movement
+  // and clearHover only when a crosshair was actually showing (study 07 §5).
+  let lastHoverX = Number.NaN;
+  let lastHoverY = Number.NaN;
+  const asCoord = (v: number): Coordinate => v as unknown as Coordinate;
 
   const hooks: ChartHostHooks = {
     // The host calls these ONCE at #buildTree; each SurfaceHost captures its config.scene
@@ -1681,8 +1733,31 @@ function buildHost<H>(
     syncWidgets: () => {},
     applyRender: () => {},
     animationRearmLevel: () => UpdateLevel.None,
-    applyHover: () => false,
-    clearHover: () => false,
+    // The crosshair follows the live pointer (study 07): set its applied x/y to the pointer
+    // coords (a free crosshair — the vertical + horizontal dashed lines track the cursor) and
+    // mark it visible. Returns true only on real movement, so the host arms one cheap Overlay
+    // frame. price/index are left for the magnet/value-label seam; the lines need only x/y.
+    applyHover: (_paneIndex, x, y) => {
+      if (x === lastHoverX && y === lastHoverY) return false;
+      lastHoverX = x;
+      lastHoverY = y;
+      crosshair.setPosition({
+        index: 0 as unknown as TimeIndex,
+        price: Number.NaN,
+        x: asCoord(x),
+        y: asCoord(y),
+        originX: asCoord(x),
+        originY: asCoord(y),
+      });
+      return true;
+    },
+    clearHover: () => {
+      if (Number.isNaN(lastHoverX) && Number.isNaN(lastHoverY)) return false; // already clear
+      lastHoverX = Number.NaN;
+      lastHoverY = Number.NaN;
+      crosshair.clear(null); // drop the position → the crosshair source emits nothing
+      return true;
+    },
     // Part B: the input ports now MOVE the chart. Each mutates the live nav cell (the math
     // is the model navigator's, called inside nav.*) or the pane's price-scale navigator,
     // then arms a Render frame so the series rebuild + axes repaint with the new geometry.
@@ -1714,6 +1789,11 @@ function buildHost<H>(
     priceAxisDrag: (paneIndex, dy, axis) => {
       markInput();
       drivePriceAxisDrag(model, paneIndex, dy, axis);
+      model.invalidate(UpdateLevel.Render);
+    },
+    priceScroll: (paneIndex, dy) => {
+      markInput();
+      drivePriceScroll(model, paneIndex, dy);
       model.invalidate(UpdateLevel.Render);
     },
   };

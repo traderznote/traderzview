@@ -16,6 +16,9 @@ import type { GestureEvent, GestureResponse, IInteractionRouter } from './types'
 export interface DefaultBehaviorPorts {
   /** Pan the time scale by a media-px horizontal delta (drag move on a pane, §4.6). */
   pan(deltaXpx: number): void;
+  /** Scroll the pane's price scale by a media-px vertical delta — a drag on the pane body
+   *  pans price too (TradingView parity); the first move pins autoscale off (study 04 §3.4). */
+  priceScroll(paneIndex: number, deltaYpx: number): void;
   /** Zoom the time scale by a ±-step around media x (wheel / time-axis drag, §13.5). */
   zoom(step: number, atX: number): void;
   /** Reset (fit time scale + autoscale) the pane at `paneIndex` (double-click, §10). */
@@ -78,7 +81,10 @@ export function registerDefaultBehaviors(
 
 function panHandler(e: GestureEvent, ports: DefaultBehaviorPorts): GestureResponse {
   if (e.phase === 'start') ports.clearHover();
-  else if (e.phase === 'move') ports.pan(e.deltaX);
+  else if (e.phase === 'move') {
+    ports.pan(e.deltaX); // horizontal → time scroll
+    ports.priceScroll(e.paneIndex, e.deltaY); // vertical → price scroll (TradingView parity)
+  }
   return 'claim'; // hold the exclusive stream through end/cancel
 }
 

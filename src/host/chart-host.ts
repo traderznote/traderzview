@@ -73,6 +73,8 @@ export interface ChartHostHooks {
   resetPane(paneIndex: number): void;
   /** Drag the price axis of a pane by a media-px vertical delta (axis scale, §4.6). */
   priceAxisDrag(paneIndex: number, deltaYpx: number, axis: 'left' | 'right'): void;
+  /** Scroll the pane's price scale by a media-px vertical delta (pane-body drag, §4.6). */
+  priceScroll(paneIndex: number, deltaYpx: number): void;
 }
 
 /** The three surface configs of one pane row (left axis may be absent ⇒ width 0). */
@@ -298,6 +300,7 @@ export class ChartHost implements FrameDriver {
       zoom: (step, atX) => h.zoom(step, atX),
       resetPane: (i) => h.resetPane(i),
       priceAxisDrag: (i, dy, axis) => h.priceAxisDrag(i, dy, axis),
+      priceScroll: (i, dy) => h.priceScroll(i, dy),
       clearHover: () => {
         if (h.clearHover()) this.#loop.invalidate(createMask({ level: UpdateLevel.Overlay }));
       },
@@ -331,6 +334,10 @@ export class ChartHost implements FrameDriver {
 
   #mkSurface(mount: HostElement, config: SurfaceConfig, paneIndex: number): SurfaceHost {
     this.#root.appendChild(mount);
+    // §7: a per-surface cursor hint — the price axis scales (ns-resize), the time axis zooms
+    // (ew-resize), the pane shows the crosshair. `style` is a plain record on a headless fake.
+    mount.style.cursor =
+      config.kind === 'price-axis' ? 'ns-resize' : config.kind === 'time-axis' ? 'ew-resize' : 'crosshair';
     const sh = new SurfaceHost(
       mount,
       this.#deps.backend,

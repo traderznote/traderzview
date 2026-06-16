@@ -12,6 +12,7 @@ function ports(): DefaultBehaviorPorts & { calls: string[] } {
     zoom: (s, x) => calls.push(`zoom(${s},${x})`),
     resetPane: (i) => calls.push(`resetPane(${i})`),
     priceAxisDrag: (i, dy, ax) => calls.push(`priceAxisDrag(${i},${dy},${ax})`),
+    priceScroll: (i, dy) => calls.push(`priceScroll(${i},${dy})`),
     clearHover: () => calls.push('clearHover'),
   };
 }
@@ -33,13 +34,13 @@ function ev(kind: GestureKind, phase: GesturePhase, over: EvOver = {}): GestureE
 }
 
 describe('registerDefaultBehaviors — gesture→intent mapping (architecture §9.1)', () => {
-  test('pane drag: start clears hover + claims; move pans by deltaX', () => {
+  test('pane drag: start clears hover + claims; move pans by deltaX AND price-scrolls by deltaY', () => {
     const router = new InteractionRouter();
     const p = ports();
     registerDefaultBehaviors(router, p);
     router.dispatch(ev('drag', 'start', { paneIndex: 0 }));
-    router.dispatch(ev('drag', 'move', { deltaX: 12 }));
-    expect(p.calls).toEqual(['clearHover', 'pan(12)']);
+    router.dispatch(ev('drag', 'move', { deltaX: 12, deltaY: -8, paneIndex: 0 }));
+    expect(p.calls).toEqual(['clearHover', 'pan(12)', 'priceScroll(0,-8)']);
   });
 
   test('pane wheel: vertical zoom step → zoom; horizontal → pan', () => {

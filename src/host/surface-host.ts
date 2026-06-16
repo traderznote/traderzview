@@ -15,7 +15,7 @@ import type { FrameProfiler } from './frame-scheduler';
 /** The few mount-element members the host touches — `HTMLElement` satisfies it, and
  *  a headless test passes a fake that records style writes (no real DOM). */
 export interface HostElement {
-  readonly style: { position: string; left: string; top: string; width: string; height: string };
+  readonly style: { position: string; left: string; top: string; width: string; height: string; cursor: string };
   appendChild(child: unknown): void;
   removeChild(child: unknown): void;
   getBoundingClientRect(): { left: number; top: number; width: number; height: number };

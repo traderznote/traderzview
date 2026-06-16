@@ -30,10 +30,12 @@
   pane.renderLayer overlay (lists=1)
   pane.endFrame
 
-=== Drag gesture → router → default pan/clearHover intents ===
+=== Drag gesture → router → default pan + price-scroll/clearHover intents ===
   clearHover
   pan 20
+  priceScroll 0 -10
   pan -5
+  priceScroll 0 5
 
 === Wheel (PIXEL deltaY=−100) → normalize → router zoom intent ===
   normalizeWheel(deltaY=-100) → scroll=0 zoom=1
