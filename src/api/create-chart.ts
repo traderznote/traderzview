@@ -1733,6 +1733,14 @@ function buildHost<H>(
   let lastHoverY = Number.NaN;
   const asCoord = (v: number): Coordinate => v as unknown as Coordinate;
 
+  // Toggle autoscale on every pane's price scales. A time ZOOM pins them OFF so the per-frame
+  // price autoscale stops re-fitting the visible window — zoom then only changes the TIME axis,
+  // never the vertical (the range was seeded to the current window last frame, so y freezes).
+  // Double-click reset turns it back ON + re-fits.
+  const setPanesAutoScale = (on: boolean): void => {
+    for (const pane of model.panes().panes()) for (const ps of pane.priceScales()) ps.setAutoScale(on);
+  };
+
   const hooks: ChartHostHooks = {
     // The host calls these ONCE at #buildTree; each SurfaceHost captures its config.scene
     // permanently. So the per-pane axis scenes + the time-axis scene MUST be the STABLE,
@@ -1791,6 +1799,10 @@ function buildHost<H>(
     },
     zoom: (step, atX) => {
       markInput();
+      // A wheel / time-axis zoom affects ONLY the time axis: pin the price scales so the
+      // per-frame autoscale stops re-fitting the visible window (else zooming in also rescales
+      // the vertical). y freezes at the current range; double-click reset re-enables autoscale.
+      setPanesAutoScale(false);
       nav.zoom(step, atX);
       model.invalidate(UpdateLevel.Render);
     },
