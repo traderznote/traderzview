@@ -52,6 +52,11 @@ export class PriceNavigator {
   setAutoScale(on: boolean): void {
     this.#autoScale = on;
   }
+  /** Keep the internal band height h current (the §4.8 damped-scale math reads it). The
+   *  navigator is constructed at height 0; the caller updates it as the pane resizes. */
+  setHeight(height: number): void {
+    this.#height = height;
+  }
 
   // --- scale (axis drag-zoom) ---------------------------------------------------
 

@@ -508,3 +508,189 @@ describe('createChartWith — timeScale().fitContent() drives the live geometry 
     expect(Number.isFinite(x as number)).toBe(true);
   });
 });
+
+// --- AXIS FURNITURE: the grid + price/time labels + pill registered into the axis scenes
+// A richer backend that records, per surface, its media size + the DrawCommand KINDS each
+// layer rendered (so a test can find the right-axis surface by width=60 / the time-axis by
+// height=28 and count its text commands, and find the grid polyline on the pane base).
+interface SurfaceRec {
+  readonly name: string;
+  size: { width: number; height: number };
+  baseKinds: string[]; // command kinds last rendered to the base layer
+  overlayKinds: string[];
+  baseLists: readonly DisplayList[]; // the base layer's lists (for coordinate inspection)
+}
+function makeRecordingBackend(recs: SurfaceRec[]): IRenderBackend {
+  let seq = 0;
+  const makeSurface = (): ISurface => {
+    const rec: SurfaceRec = {
+      name: `surf${seq++}`,
+      size: { width: 0, height: 0 },
+      baseKinds: [],
+      overlayKinds: [],
+      baseLists: [],
+    };
+    recs.push(rec);
+    return {
+      setMediaSize: (s) => void (rec.size = s),
+      beginFrame: () => ({ mediaSize: rec.size, bitmapSize: rec.size, hr: 1, vr: 1 }),
+      renderLayer: (layer, lists: readonly DisplayList[]) => {
+        const kinds: string[] = [];
+        for (const l of lists) for (const c of l.commands) kinds.push(c.kind);
+        if (layer === 'base') {
+          rec.baseKinds = kinds;
+          // copy the text items out (the builder pools its arrays — kinds/coords are read now).
+          rec.baseLists = lists.map((l) => ({ ...l, commands: l.commands.map((c) => ({ ...c })) }));
+        } else rec.overlayKinds = kinds;
+      },
+      endFrame: () => {},
+      resolutionChanged: { subscribe: () => () => {} },
+      snapshot: () => ({ _tag: 'SurfaceSnapshot' }),
+      dispose: () => {},
+    } as unknown as ISurface;
+  };
+  return {
+    createSurface: () => makeSurface(),
+    createImage: () => ({ id: 0, width: 0, height: 0 }) as never,
+    composeSnapshot: () => ({ _tag: 'Snapshot' }) as never,
+    // a width ∝ text length so right-aligned price labels measure sensibly.
+    text: { measure: (t: { text?: string }) => ({ width: 6 * String(t.text ?? '').length, ascent: 8, descent: 2 }) } as never,
+    dispose: () => {},
+  };
+}
+// Count individual text ITEMS (labels) the base layer rendered — one builder.text([...])
+// call is a single 'text' command carrying N items, so we count items, not commands.
+function countTextItems(lists: readonly DisplayList[]): number {
+  let n = 0;
+  for (const l of lists) {
+    for (const c of l.commands) {
+      if (c.kind === 'text') n += (c as { items: readonly unknown[] }).items.length;
+    }
+  }
+  return n;
+}
+// All text-item baselines (x positions) the base layer rendered, in order.
+function textXs(lists: readonly DisplayList[]): number[] {
+  const xs: number[] = [];
+  for (const l of lists) {
+    for (const c of l.commands) {
+      if (c.kind === 'text') for (const it of (c as { items: readonly { x: number }[] }).items) xs.push(it.x);
+    }
+  }
+  return xs;
+}
+// Numeric values parsed from the text-item strings — the price-axis labels are formatted
+// numbers, so this reads back what prices the axis is actually showing.
+function textValues(lists: readonly DisplayList[]): number[] {
+  const vals: number[] = [];
+  for (const l of lists) {
+    for (const c of l.commands) {
+      if (c.kind !== 'text') continue;
+      for (const it of (c as { items: readonly { text?: string }[] }).items) {
+        const v = Number(String(it.text ?? '').replace(/[^0-9.\-]/g, ''));
+        if (Number.isFinite(v) && String(it.text ?? '').trim() !== '') vals.push(v);
+      }
+    }
+  }
+  return vals;
+}
+
+function setupFurniture() {
+  const recs: SurfaceRec[] = [];
+  const raf = makeRaf();
+  const doc = makeDoc();
+  const container = makeEl(doc);
+  const chart = createChartWith(
+    container as unknown as HTMLElement,
+    makeRecordingBackend(recs),
+    timeBehavior(),
+    { layout: { textColor: '#191919' } },
+    { scheduler: raf },
+  );
+  raf.flush(0);
+  return { recs, raf, chart };
+}
+
+describe('createChartWith — AXIS FURNITURE wired into the live axis/pane scenes', () => {
+  test('the right price-axis scene emits ≥2 price-label text commands after setData', () => {
+    const { recs, raf, chart } = setupFurniture();
+    const s = chart.addSeries(CandlestickSeries);
+    s.setData(CANDLES);
+    chart.timeScale().fitContent();
+    raf.flush(16);
+    // the right axis surface is the one laid out 60px wide (RIGHT_AXIS_WIDTH).
+    const rightAxis = recs.find((r) => r.size.width === 60 && r.size.height > 28);
+    expect(rightAxis).toBeDefined();
+    // price tick labels + the last-value pill text all land on the right-axis base layer.
+    expect(countTextItems(rightAxis!.baseLists)).toBeGreaterThanOrEqual(2);
+  });
+
+  test('the bottom time-axis scene emits ≥2 time-label text commands after setData', () => {
+    const { recs, raf, chart } = setupFurniture();
+    const s = chart.addSeries(CandlestickSeries);
+    s.setData(CANDLES);
+    chart.timeScale().fitContent(); // spread the 3 bars so >1 tick is visible
+    raf.flush(16);
+    // the time axis surface is the wide one laid out 28px tall (timeAxisHeight).
+    const timeAxis = recs.find((r) => r.size.height === 28 && r.size.width > 60);
+    expect(timeAxis).toBeDefined();
+    expect(countTextItems(timeAxis!.baseLists)).toBeGreaterThanOrEqual(2);
+  });
+
+  test('the pane scene has a grid source emitting polyline lines after setData', () => {
+    const { recs, raf, chart } = setupFurniture();
+    const s = chart.addSeries(CandlestickSeries);
+    s.setData(CANDLES);
+    chart.timeScale().fitContent();
+    raf.flush(16);
+    // the pane surface is the large one (wider than 60, taller than 28).
+    const pane = recs.find((r) => r.size.width > 60 && r.size.height > 28);
+    expect(pane).toBeDefined();
+    // the grid registers a band-Grid polyline (vertical + horizontal lines) on the base.
+    expect(pane!.baseKinds).toContain('polyline');
+  });
+
+  test('after a geometry change (fitContent), the time-label coordinates shift (live tracking)', () => {
+    const { recs, raf, chart } = setupFurniture();
+    const s = chart.addSeries(CandlestickSeries);
+    s.setData(CANDLES);
+    raf.flush(16); // default 6px spacing: labels at the right edge, tightly packed
+    const findTimeAxis = (): SurfaceRec => recs.find((r) => r.size.height === 28 && r.size.width > 60)!;
+    const before = textXs(findTimeAxis().baseLists);
+    expect(before.length).toBeGreaterThan(0);
+    // fitContent re-spreads the 3 bars across the pane through the LIVE nav cell the grid +
+    // labels share; the time-tick Xs recompute from that geometry, so they must move.
+    chart.timeScale().fitContent();
+    raf.flush(32);
+    const after = textXs(findTimeAxis().baseLists);
+    expect(after.length).toBeGreaterThan(0);
+    // the label layout shifted: either the count grew (more ticks now fit) or the positions
+    // changed — in both cases the serialized coordinate vector is different.
+    expect(JSON.stringify(after)).not.toBe(JSON.stringify(before));
+  });
+
+  test('REGRESSION: the price axis fits the FULL visible window, not the 60px right-axis surface', () => {
+    // The price-tick label source renders in the 60px-wide right-axis surface. The visible-bar
+    // window that drives autoscale must be taken from the PANE width, not that surface width —
+    // else the axis collapses to the last few bars. Build data whose FIRST half (≈200) sits far
+    // above the LAST half (≈100): at full view (fitContent) the axis MUST span ~100..200. With
+    // the bug, the 60px window sees only the last (≈100) bars and the max label never reaches 200.
+    const { recs, raf, chart } = setupFurniture();
+    const s = chart.addSeries(CandlestickSeries);
+    const base = Math.floor(Date.UTC(2026, 0, 1) / 1000);
+    const bars = Array.from({ length: 100 }, (_, i) => {
+      const c = i < 50 ? 200 : 100; // high plateau then low plateau
+      return { time: base + i * 86400, open: c, high: c + 1, low: c - 1, close: c };
+    });
+    s.setData(bars);
+    chart.timeScale().fitContent();
+    raf.flush(16);
+    const rightAxis = recs.find((r) => r.size.width === 60 && r.size.height > 28)!;
+    const vals = textValues(rightAxis.baseLists);
+    expect(vals.length).toBeGreaterThan(0);
+    // the high plateau (≈200) MUST be represented — the bug collapses the axis near the last
+    // bars' ≈100 range, so the max label would stay ≈100, never reaching the ≈200 region.
+    expect(Math.max(...vals)).toBeGreaterThan(160);
+    expect(Math.min(...vals)).toBeLessThan(140);
+  });
+});

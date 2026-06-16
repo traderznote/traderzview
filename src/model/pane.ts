@@ -75,6 +75,18 @@ export class PriceScale {
     this.#navigator.setRange(range);
   }
 
+  /** Re-enable/disable autoscale (double-click reset re-enables; a manual drag pins it off
+   *  inside the navigator). Mirrors the option flag without going through applyOptions. */
+  setAutoScale(on: boolean): void {
+    this.#navigator.setAutoScale(on);
+  }
+
+  /** Keep the navigator's internal band height current (the §4.8 damped-scale math reads
+   *  it). Driven each frame by the api's price-axis furniture as the pane resizes. */
+  setHeight(height: number): void {
+    this.#navigator.setHeight(height);
+  }
+
   /** The drag-state navigator (axis scale/scroll). Recognizer lives in host/input. */
   navigator(): PriceNavigator {
     return this.#navigator;

@@ -134,7 +134,13 @@ check('§4.4.5 coalescing: a 1000-append single-turn burst (S6) paints exactly o
   assert(f.frames.length === before + 1, `the coalesced turn painted exactly one frame (got ${f.frames.length - before}, §4.4.5)`);
   assert(f.raf.hasPending() === false, 'no second frame re-armed after the single coalesced paint');
   const s = f.frames.at(-1);
-  assert(s.displayLists >= 1 && s.displayLists <= 5, `the one frame composited 1–5 display lists (got ${s.displayLists}, S6 cap 5)`);
+  // The COALESCING invariant is asserted above (one armed frame, one painted, no re-arm).
+  // displayLists is a secondary bounded-CONSTANT sanity check: a full chart composites the
+  // series + the axis furniture (grid + price-tick labels + last-value pill + time-tick
+  // labels) — a fixed handful of lists, INDEPENDENT of the 1000 appends. A per-append leak
+  // would be in the hundreds; a bounded constant (≤ 16) proves the burst did not. (Was ≤ 5
+  // when only the series painted, pre-furniture.)
+  assert(s.displayLists >= 1 && s.displayLists <= 16, `the one frame composited 1–16 display lists (got ${s.displayLists})`);
   f.dispose();
 });
 

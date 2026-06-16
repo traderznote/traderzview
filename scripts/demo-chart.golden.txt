@@ -3,15 +3,15 @@
 
 === addSeries(CandlestickSeries) → setData → render ===
   surf0.beginFrame full
-  surf0.renderLayer base lists=1 cmds=3
+  surf0.renderLayer base lists=2 cmds=5
   surf0.renderLayer overlay lists=0 cmds=0
   surf0.endFrame
   surf2.beginFrame full
-  surf2.renderLayer base lists=0 cmds=0
+  surf2.renderLayer base lists=2 cmds=3
   surf2.renderLayer overlay lists=0 cmds=0
   surf2.endFrame
   surf3.beginFrame full
-  surf3.renderLayer base lists=0 cmds=0
+  surf3.renderLayer base lists=1 cmds=1
   surf3.renderLayer overlay lists=0 cmds=0
   surf3.endFrame
   surf5.beginFrame full

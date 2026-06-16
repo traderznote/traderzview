@@ -362,6 +362,14 @@ export class Timeline<TItem extends ItemWithTime = ItemWithTime, H = unknown, I 
     return this.#weights[slot];
   }
 
+  /** @internal the representative INTERNAL item at a slot — the `I` the behavior's
+   *  formatTick/formatItem consume (the axis tick-label path). Undefined when out of
+   *  range. Behavior-agnostic: callers feed it straight to behavior.formatTick, so a
+   *  number-keyed behavior gets its number and the time behavior gets its {timestamp}. */
+  internalAt(slot: number): I | undefined {
+    return slot >= 0 && slot < this.#count ? this.#items[slot] : undefined;
+  }
+
   /** @internal upper-bounded slot search (kept symmetric with nearestSlotAt). */
   firstSlotAfter(key: HorzKey): number {
     return upperBound(this.#keys, key as unknown as number, gtNum, 0, this.#count);

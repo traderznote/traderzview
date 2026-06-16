@@ -8,7 +8,7 @@
 // §14 event hubs the host pointer pipeline fires.
 import type { Coordinate, DeepPartial, HorzKey, IFrameCounters, Logical } from '../core';
 import { createFrameCounters } from '../core';
-import type { DisplayList, IRenderBackend, SceneSource, ViewFrame } from '../gfx';
+import type { DisplayList, FontSpec, IRenderBackend, ITextMeasurer, SceneSource, ViewFrame } from '../gfx';
 import { DisplayListBuilder, ZBand } from '../gfx';
 import { PlotStore, Timeline, timeBehavior } from '../data';
 import type { IHorzScaleBehavior, PlotStoreView, Time } from '../data';
@@ -23,8 +23,16 @@ import {
   clampRightOffset,
   rightOffsetForPixels,
   fitContentWithPixels,
+  createPriceGeometry,
+  rebuildTickMarks,
+  TickMarkEngine,
+  maxLabelWidthFor,
+  maxIndexesPerMark,
+  defaultLogFormula,
 } from '../model';
-import type { HorzGeometry, Pane, ChartOptions, IPrimitive as ModelIPrimitive } from '../model';
+import type { HorzGeometry, PriceGeometry, Pane, ChartOptions, IPrimitive as ModelIPrimitive } from '../model';
+import { priceFormatter } from '../fmt';
+import type { IPriceFormatter } from '../fmt';
 import { ChartHost, createRafScheduler } from '../host';
 import type {
   ChartHostHooks,
@@ -36,9 +44,10 @@ import type {
   MeasuredAxes,
   PaneSurfaceConfigs,
 } from '../host';
-import { PaneScene, PrimitiveBinding, itemWindow, createPriceLineSource } from '../views';
+import { PaneScene, PrimitiveBinding, itemWindow, createPriceLineSource, createGridSource, createLastValueLabelSource } from '../views';
 import type {
   ItemBuffer,
+  LastValueLabelState,
   OwnerPlacement,
   PriceLineSource,
   PriceLineState,
@@ -103,6 +112,7 @@ interface Wired<H> {
   readonly handle: ISeries<SeriesType, H>;
   readonly pane: Pane;
   readonly scene: PaneScene;
+  readonly store: PlotStoreView; // the series' PlotStore — the axis furniture reads its range/last
   readonly source: SceneSource; // the registered SceneSource — unregistered on removeSeries
   readonly paneSeries: Parameters<Pane['addSeries']>[0]; // the model PaneSeries — removed on removeSeries
   /** Unregister this series' price-line SceneSources from the pane scene (removeSeries). */
@@ -195,6 +205,154 @@ export function createChartWith<H = Time>(
   };
   let ownerSeq = 0;
 
+  // --- AXIS FURNITURE: the stable per-pane axis scenes + the live geometry feed -------
+  // The host calls paneConfigs()/measure() ONCE at #buildTree (each SurfaceHost captures
+  // its config.scene permanently). A FRESH newScene() per call would throw away anything
+  // registered into it, so the right/left price-axis scenes and the bottom time-axis scene
+  // are MEMOIZED here exactly like sceneFor(pane). Furniture (grid + price-tick labels +
+  // last-value pill + time-tick labels) registers into these STABLE scenes once and
+  // re-emits every frame the live geometry/price range moves, sharing the SAME
+  // HorzGeometry + PriceConverter the series rebuilds with (so lines + labels align with
+  // the candles to the pixel). See installFurniture below.
+  const rightAxisScenes = new Map<Pane, PaneScene>();
+  const rightAxisSceneFor = (pane: Pane): PaneScene => {
+    let s = rightAxisScenes.get(pane);
+    if (s === undefined) {
+      s = new PaneScene();
+      rightAxisScenes.set(pane, s);
+      installFurniture(pane); // wire grid + axis labels into the now-existing scenes
+    }
+    return s;
+  };
+  const leftAxisScenes = new Map<Pane, PaneScene>();
+  const leftAxisSceneFor = (pane: Pane): PaneScene => {
+    let s = leftAxisScenes.get(pane);
+    if (s === undefined) (s = new PaneScene()), leftAxisScenes.set(pane, s);
+    return s;
+  };
+  const timeAxisScene = new PaneScene(); // ONE bottom time-axis scene (single-pane layout)
+
+  // The most-recently-added (primary) model series per pane — furniture derives its live
+  // geometry + price range + last value from this series' store, exactly as the series'
+  // own rebuild does. Updated on createSeries / cleared on destroySeries.
+  const primarySeries = new Map<Pane, { model: ModelSeries; store: PlotStoreView }>();
+  const panesWithFurniture = new Set<Pane>();
+
+  /**
+   * Wire the axis furniture for a pane ONCE into its STABLE scenes (idempotent). The grid
+   * goes to the PANE scene (band Grid, below the series); the price-tick labels + the
+   * last-value pill go to the RIGHT-AXIS scene (band Labels); the time-tick labels go to
+   * the bottom TIME-AXIS scene (band Labels). Every source recomputes per frame from the
+   * pane's primary-series store + the live nav cell — the SAME `buildHorzGeometry` params
+   * and `priceConverterFor` the series rebuild uses, so the grid/labels track pan/zoom and
+   * the price range to the pixel. A pane with no data (no primary series) emits nothing.
+   */
+  function installFurniture(pane: Pane): void {
+    if (panesWithFurniture.has(pane)) return;
+    panesWithFurniture.add(pane);
+    const measurer: ITextMeasurer = backend.text;
+    const timelineU = timeline as unknown as Timeline<ItemWithTime, unknown, unknown>;
+    const o = model.options() as ChartOptions;
+    const font: FontSpec = { family: o.layout.fontFamily, size: o.layout.fontSize };
+    const textColor = (): string => (model.options() as ChartOptions).layout.textColor;
+    // The pane's live price geometry for THIS frame's height (mirrors priceConverterFor +
+    // its PriceGeometry twin) and the visible HorzGeometry for THIS frame's pane width.
+    // Per-frame memo: the grid + price-labels + pill + time-labels all ask for the geometry
+    // in the same composite; compute it (2 store scans) ONCE per frame object, not per source.
+    let geomFrame: ViewFrame | null = null;
+    let geomCached: FurnitureGeometry | null = null;
+    const liveFor = (frame: ViewFrame): FurnitureGeometry | null => {
+      if (frame === geomFrame) return geomCached;
+      geomFrame = frame;
+      const ps = primarySeries.get(pane);
+      if (ps === undefined || ps.store.length === 0) return (geomCached = null);
+      const height = frame.frame.mediaSize.height || size.height || 100;
+      // The price range + time geometry are PANE properties: use the PANE width, NOT the
+      // calling surface's width. The price-tick label source renders in the 60px-wide
+      // right-axis surface; taking its width would shrink the visible-bar window to the last
+      // few bars and mis-fit the axis (while the candles use the full pane width). navPaneWidth()
+      // is the stable pane width (== the pane surface width for the default single-axis layout).
+      const width = navPaneWidth() || size.width || 100;
+      const scale = pane.priceScale(scaleIdOf(ps.model)); // the pane's price-axis scale
+      return (geomCached = buildFurnitureGeometry(ps.store, ps.model, height, width, nav, scale));
+    };
+
+    // 1) GRID → the pane scene (band Grid). Fed the price-tick Ys + the time-tick Xs.
+    const gridSource = createGridSource(o.grid);
+    let lastGridSig = '';
+    const gridFeed: SceneSource = {
+      zBand: ZBand.Grid,
+      update(frame): void {
+        const g = liveFor(frame);
+        // Seed the pane's price navigator from THIS (pane-scene) geometry — the only furniture
+        // source with both the correct pane width AND pane height. Keeps the §4.8 drag-damping
+        // band height current, and while autoscaling mirrors the fitted range so a price-axis
+        // drag starts from a valid snapshot. The axis sources (60px-wide / 28px-tall surfaces)
+        // must NOT seed, or they would corrupt the pane-level price range.
+        const ps = primarySeries.get(pane);
+        const scale = ps === undefined ? null : pane.priceScale(scaleIdOf(ps.model));
+        if (g !== null && scale !== null) {
+          scale.setHeight(g.priceGeom.internalHeight);
+          if (scale.isAutoScale()) scale.setRange(g.priceGeom.range);
+        }
+        const xs = g === null ? [] : timeTickXs(g, timelineU, font, measurer);
+        const ys = g === null ? [] : priceTickYs(g);
+        const sig = `${xs.join(',')}|${ys.join(',')}`;
+        if (sig !== lastGridSig) {
+          lastGridSig = sig;
+          gridSource.setTicks(xs, ys);
+        }
+        gridSource.update(frame);
+      },
+      displayLists: () => gridSource.displayLists(),
+    };
+    sceneFor(pane).register(gridFeed, { ownerZ: -1, ownerId: -1 });
+
+    // 2) PRICE AXIS (right) → the right-axis scene (band Labels): the price TICK LABELS,
+    //    right-aligned inside RIGHT_AXIS_WIDTH (api-side emit via DisplayListBuilder), + the
+    //    last-value pill at the last close (the views createLastValueLabelSource).
+    const priceLabels = makePriceAxisLabelSource(font, textColor, measurer);
+    const priceLabelSource: SceneSource = {
+      zBand: ZBand.Labels,
+      update: (frame) => priceLabels.updateWith(liveFor(frame), frame),
+      displayLists: () => priceLabels.displayLists(),
+    };
+    rightAxisSceneFor(pane).register(priceLabelSource, { ownerZ: -1, ownerId: -1 });
+
+    let lastPillGeom: FurnitureGeometry | null = null;
+    const pillProvider = (): LastValueLabelState => {
+      const g = lastPillGeom;
+      if (g === null || g.lastValue === null) return { y: null, text: '', color: '' };
+      return {
+        y: g.price.priceToCoordinate(g.lastValue),
+        text: g.formatter.format(g.lastValue),
+        color: g.lastColor,
+      };
+    };
+    const pillInner = createLastValueLabelSource(pillProvider, measurer, { font });
+    const pillSource: SceneSource = {
+      zBand: ZBand.Labels,
+      update(frame): void {
+        lastPillGeom = liveFor(frame);
+        pillInner.update(frame);
+      },
+      displayLists: () => pillInner.displayLists(),
+    };
+    rightAxisSceneFor(pane).register(pillSource, { ownerZ: 0, ownerId: 0 });
+
+    // 3) TIME AXIS (bottom) → the time-axis scene (band Labels): the time TICK LABELS,
+    //    centered on each tick X within the 28-px time-axis height.
+    const timeLabels = makeTimeAxisLabelSource(font, textColor);
+    const behU = beh as unknown as IHorzScaleBehavior<unknown, unknown>;
+    const modelU = model as unknown as ChartModel<unknown, unknown>;
+    const timeLabelSource: SceneSource = {
+      zBand: ZBand.Labels,
+      update: (frame) => timeLabels.updateWith(liveFor(frame), timelineU, behU, modelU, measurer, frame),
+      displayLists: () => timeLabels.displayLists(),
+    };
+    timeAxisScene.register(timeLabelSource, { ownerZ: -1, ownerId: -1 });
+  }
+
   // §2 IDENTITY LAW: ONE cached handle per pane and per (pane, price-scale id), shared by
   // EVERY resolver — chart.panes()/priceScale(), series.pane()/priceScale(), pane.priceScale()
   // — so they all return the SAME object (===). A destroyed overlay scale's handle latches
@@ -257,7 +415,19 @@ export function createChartWith<H = Time>(
   // Build the host (M8) over the injected backend; it composites each pane's PaneScene
   // → backend.renderLayer per the §6 call sequence. `markInput` (profile-only) tags the
   // input→paint lag at the gesture/hover hooks (perf §4.4.9).
-  host = buildHost<H>(backend, element, model, sceneFor, nav, env?.scheduler, profiler, markInput);
+  host = buildHost<H>(
+    backend,
+    element,
+    model,
+    sceneFor,
+    rightAxisSceneFor,
+    leftAxisSceneFor,
+    timeAxisScene,
+    nav,
+    env?.scheduler,
+    profiler,
+    markInput,
+  );
   host.setSize(size); // one synchronous Layout flush → the first paint
 
   // The chart facade handle, assigned at the end (before any user attach call can run) so
@@ -347,6 +517,10 @@ export function createChartWith<H = Time>(
         navPaneWidth,
       );
       wired.set(w.model, w);
+      // The axis furniture for this pane reads the (most-recent) primary series' store for
+      // its live price range + last value (the grid Ys, the price labels, the pill). The
+      // furniture is installed lazily when the pane's right-axis scene is first resolved.
+      primarySeries.set(pane, { model: w.model, store: w.store });
       pane.addSeries(w.paneSeries);
       model.invalidate(UpdateLevel.Layout);
       return { model: w.model, handle: w.handle };
@@ -359,6 +533,17 @@ export function createChartWith<H = Time>(
       w.disposeExtras(); // unregister this series' price-line SceneSources too (§11.1)
       w.pane.removeSeries(w.paneSeries); // drop it from the model pane
       wired.delete(m);
+      // If the furniture's primary series is the one removed, repoint to another series on
+      // the pane (or clear, so the furniture emits nothing — no stale grid/labels).
+      if (primarySeries.get(w.pane)?.model === m) {
+        primarySeries.delete(w.pane);
+        for (const other of wired.values()) {
+          if (other.pane === w.pane) {
+            primarySeries.set(w.pane, { model: other.model, store: other.store });
+            break;
+          }
+        }
+      }
       model.invalidate(UpdateLevel.Layout);
     },
     destroyPane(pane) {
@@ -608,7 +793,14 @@ function wireSeries<H>(
       rightOffset: nav.rightOffset(),
       baseIndex: store.length - 1,
     });
-    const price = priceConverterFor(store, frame.frame.mediaSize.height || size.height || 100);
+    // Autoscale the price range to the VISIBLE window (or the navigator's pinned range after a
+    // manual axis drag), so the candles track the y-axis exactly as the furniture grid/labels do.
+    const scale = pane.priceScale(scaleIdOf(modelSeries));
+    const price = priceConverterFor(
+      store,
+      frame.frame.mediaSize.height || size.height || 100,
+      resolvePriceRange(store, scale, horz),
+    );
     lastPrice = price;
     kind.itemsFromStore(store as PlotStoreView, { kind: 'replace' }, buffer);
     kind.convert(buffer, win, frame, horz, price);
@@ -776,7 +968,7 @@ function wireSeries<H>(
     priceLineEntries.clear();
     lineToEntry.clear();
   };
-  return { model: modelSeries, handle, pane, scene, source, paneSeries, disposeExtras };
+  return { model: modelSeries, handle, pane, scene, store: store as PlotStoreView, source, paneSeries, disposeExtras };
 }
 
 function scaleIdOf(s: ModelSeries): string {
@@ -798,32 +990,336 @@ function makeBuffer(kind: SeriesKind<unknown>): ItemBuffer<unknown> {
   return ship ?? ({ length: 0 } as unknown as ItemBuffer<unknown>);
 }
 
-// A PriceConverter spanning the store's value range over the pane height. A full chart
-// derives this from the price-scale autoscale; here it bounds the data so emit makes
-// in-range geometry (the backend stream is what the e2e gates on).
-// DEFERRED (M12): feeding the attached primitives' autoscale MARGINS (max-merged correctly
-// at the model level — Series.#baseAutoscaleInfo §9.2.3) into this LIVE geometry would
-// shift demo-chart's golden, so priceConverterFor is left as-is; primitive-margin-into-
-// live-geometry is a separate seam (the real price-scale autoscale path) for a later milestone.
-function priceConverterFor(store: PlotStoreView, height: number): ReturnType<typeof buildPriceConverter> {
+// A PriceConverter spanning a pane's price range over the pane height. The range is the
+// price-scale autoscale result for THIS frame (see resolvePriceRange): fitted to the VISIBLE
+// bar window when the scale autoscales (the default), or the navigator's pinned range after a
+// manual price-axis drag (study 04 §3.4/§4.8). This closes the autoscale→navigator-range seam
+// — the y-axis now tracks pan/zoom AND responds to an axis drag (previously the range was the
+// whole-store min/max, so the axis never moved). priceRangeOf bounds emit to in-range geometry.
+function priceRangeOf(
+  store: PlotStoreView,
+  window?: { lo: number; hi: number } | null,
+): { min: number; max: number } {
   let min = Number.POSITIVE_INFINITY;
   let max = Number.NEGATIVE_INFINITY;
-  for (let i = 0; i < store.length; i++) {
+  const lo = window ? window.lo : 0;
+  const hi = window ? window.hi : store.length - 1;
+  for (let i = lo; i <= hi; i++) {
     if (store.min(i) < min) min = store.min(i);
     if (store.max(i) > max) max = store.max(i);
   }
   if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) (min = 0), (max = 1);
-  return buildPriceConverter({
+  return { min, max };
+}
+
+/** The visible bar-index window [lo, hi] (inclusive, clamped to the store) the live
+ *  HorzGeometry shows. null when the store is empty; the whole store when the geometry has no
+ *  range; clamped when the window spills past either data edge (rightOffset / fitContent). */
+function visibleIndexWindow(store: PlotStoreView, horz: HorzGeometry): { lo: number; hi: number } | null {
+  if (store.length === 0) return null;
+  const vr = horz.visibleLogicalRange();
+  if (vr === null) return { lo: 0, hi: store.length - 1 };
+  let lo = Math.floor(vr.from as unknown as number);
+  let hi = Math.ceil(vr.to as unknown as number);
+  if (lo < 0) lo = 0;
+  if (hi > store.length - 1) hi = store.length - 1;
+  if (lo > hi) return null; // window entirely off the data (all bars scrolled away)
+  return { lo, hi };
+}
+
+/** The price range to PAINT this frame (pure). Autoscaling (default) → fit the VISIBLE
+ *  window; manually scaled (autoScale off, after a drag) → the navigator's pinned range.
+ *  Falls back to the whole-store range when no bar is in view, so the axis never blanks. */
+function resolvePriceRange(
+  store: PlotStoreView,
+  scale: ReturnType<Pane['priceScale']>,
+  horz: HorzGeometry,
+): { min: number; max: number } {
+  if (scale !== null && !scale.isAutoScale()) {
+    const pinned = scale.range();
+    if (pinned !== null) return { min: pinned.min, max: pinned.max };
+  }
+  return priceRangeOf(store, visibleIndexWindow(store, horz));
+}
+
+/** The shared PriceGeometry params for the store/height (study 04). The PriceConverter
+ *  AND the furniture tick-mark PriceGeometry are both built from THIS (and the SAME resolved
+ *  `range`), so the price-tick Ys + the candle Ys land on the same pixels (grid/labels align
+ *  with the series). `range` omitted → the whole-store range (the empty-frame fallback). */
+function priceGeometryParamsFor(
+  store: PlotStoreView,
+  height: number,
+  range?: { min: number; max: number },
+): Parameters<typeof createPriceGeometry>[0] {
+  const r = range ?? priceRangeOf(store);
+  return {
     height: height > 0 ? height : 100,
-    range: { min, max },
+    range: r,
     scaleMargins: { top: 0.1, bottom: 0.1 },
     marginAbovePx: 0,
     marginBelowPx: 0,
     mode: PriceScaleMode.Normal,
     inverted: false,
-    firstValue: min,
+    logFormula: defaultLogFormula(),
+  };
+}
+
+function priceConverterFor(
+  store: PlotStoreView,
+  height: number,
+  range?: { min: number; max: number },
+): ReturnType<typeof buildPriceConverter> {
+  const p = priceGeometryParamsFor(store, height, range);
+  return buildPriceConverter({
+    height: p.height,
+    range: p.range,
+    scaleMargins: p.scaleMargins,
+    marginAbovePx: p.marginAbovePx,
+    marginBelowPx: p.marginBelowPx,
+    mode: p.mode,
+    inverted: p.inverted,
+    firstValue: (p.range as { min: number }).min,
   });
 }
+
+// --- AXIS FURNITURE helpers: live geometry + tick coords + the api-side label sources --
+
+const PRICE_MIN_MOVE = 0.01; // the lightweight-charts default tick size (precision 2)
+const PRICE_BASE = Math.round(1 / PRICE_MIN_MOVE); // base = round(1/minMove) for rebuildTickMarks
+
+/** One frame's furniture geometry for a pane: the visible HorzGeometry (time), the price
+ *  PriceGeometry + PriceConverter (both from priceGeometryParamsFor), the price ticks, the
+ *  last value + its color, and the price formatter. Shared by grid + axis labels + pill. */
+interface FurnitureGeometry {
+  readonly horz: HorzGeometry;
+  readonly priceGeom: PriceGeometry;
+  readonly price: ReturnType<typeof buildPriceConverter>;
+  readonly lastValue: number | null;
+  readonly lastColor: string;
+  readonly formatter: IPriceFormatter;
+}
+
+/** Build a pane's furniture geometry for this frame — mirrors wireSeries.rebuild's
+ *  buildHorzGeometry + priceConverterFor so the lines/labels share the series' geometry. */
+function buildFurnitureGeometry(
+  store: PlotStoreView,
+  model: ModelSeries,
+  height: number,
+  width: number,
+  nav: LiveNav,
+  scale: ReturnType<Pane['priceScale']>,
+): FurnitureGeometry {
+  const horz = buildHorzGeometry({
+    width,
+    barSpacing: nav.barSpacing(),
+    rightOffset: nav.rightOffset(),
+    baseIndex: store.length - 1,
+  });
+  // ONE resolved range drives both the PriceGeometry (tick Ys) and the converter (candle Ys),
+  // so grid/labels stay pixel-aligned with the series. The navigator SEED (range + band height)
+  // is done by the grid source only — the one furniture source with the correct pane width AND
+  // pane height (the axis surfaces are narrower/shorter and would corrupt it).
+  const range = resolvePriceRange(store, scale, horz);
+  const params = priceGeometryParamsFor(store, height, range);
+  const priceGeom = createPriceGeometry(params);
+  const price = priceConverterFor(store, height, range);
+  const lv = model.lastValue();
+  return {
+    horz,
+    priceGeom,
+    price,
+    lastValue: lv === null ? null : lv.price,
+    lastColor: model.priceLineColor(),
+    formatter: priceFormatter(2, PRICE_MIN_MOVE),
+  };
+}
+
+/** Price-tick media-px Ys for the grid horizontal lines (rebuildTickMarks coords). */
+function priceTickYs(g: FurnitureGeometry): number[] {
+  return rebuildTickMarks(g.priceGeom, PRICE_BASE).map((t) => t.coord);
+}
+
+/** Time-tick media-px Xs for the grid vertical lines — the visible logical range mapped
+ *  through the live HorzGeometry, thinned by the TickMarkEngine over the timeline weights
+ *  so adjacent labels/lines do not overlap (study 03 §4.11/§4.12). */
+function timeTickXs(
+  g: FurnitureGeometry,
+  timeline: Timeline<ItemWithTime, unknown, unknown>,
+  font: FontSpec,
+  measurer: ITextMeasurer,
+): number[] {
+  void measurer;
+  const marks = selectTimeMarks(g, timeline, font);
+  return marks.map((m) => g.horz.indexToCoordinate(m.index));
+}
+
+/** Select the visible, non-overlapping time tick-marks: take the integer slots inside the
+ *  visible strict range, feed their timeline weights to the TickMarkEngine, and keep the
+ *  greedy descending-weight selection (the same engine the model time axis uses). */
+function selectTimeMarks(
+  g: FurnitureGeometry,
+  timeline: Timeline<ItemWithTime, unknown, unknown>,
+  font: FontSpec,
+): readonly { index: number; weight: number }[] {
+  const n = timeline.slotCount;
+  if (n === 0) return [];
+  const strict = g.horz.visibleStrictRange();
+  if (strict === null) return [];
+  const lo = Math.max(0, strict.left);
+  const hi = Math.min(n - 1, strict.right);
+  if (hi < lo) return [];
+  const maxW = maxLabelWidthFor(font.size, undefined);
+  const gap = Math.max(1, maxIndexesPerMark(maxW, g.horz.barSpacing));
+  // Bound per-frame cost (perf §6.3 / structural §4.4.3): NEVER iterate every visible slot
+  // — on a decimated / zoomed-far-out view that is O(bars) (it turned the structural bench
+  // from seconds into minutes). Above a span cap, place labels at the uniform label-stride
+  // `gap` (O(label count)); individual day/week boundaries are not distinguishable at that
+  // density. Below it (normal zoom, a few hundred visible bars) the weight-based engine
+  // still aligns labels to the strongest time boundaries.
+  const span = hi - lo + 1;
+  // Above this many visible bars, skip the O(span) weight-based engine and place labels at
+  // the uniform label-stride (O(label count)). A real on-screen window is a few hundred bars;
+  // a denser view (or the headless degenerate all-bars window) gets uniform labels, which at
+  // that density are visually identical to weight-aligned ones — and never O(bars) per frame.
+  const SPAN_CAP = 512;
+  if (span > SPAN_CAP) {
+    const out: { index: number; weight: number }[] = [];
+    for (let i = lo; i <= hi; i += gap) out.push({ index: i, weight: timeline.weightAt(i) });
+    return out;
+  }
+  const all: { index: number; weight: number }[] = [];
+  for (let i = lo; i <= hi; i++) all.push({ index: i, weight: timeline.weightAt(i) });
+  const engine = new TickMarkEngine();
+  engine.setMarks(all);
+  return engine.build({ maxIndexesPerMark: gap });
+}
+
+/** A thin api-side PRICE-AXIS label source (§3.1: api may emit gfx via DisplayListBuilder).
+ *  Emits one media `text` command per price tick, right-aligned within RIGHT_AXIS_WIDTH. */
+function makePriceAxisLabelSource(
+  font: FontSpec,
+  color: () => string,
+  measurer: ITextMeasurer,
+): { updateWith(g: FurnitureGeometry | null, frame: ViewFrame): void; displayLists(): readonly DisplayList[] } {
+  const builder = new DisplayListBuilder();
+  let cached: readonly DisplayList[] = EMPTY_LISTS;
+  let sig: string | null = null;
+  return {
+    updateWith(g, frame): void {
+      const w = frame.frame.mediaSize.width || RIGHT_AXIS_WIDTH;
+      const h = frame.frame.mediaSize.height;
+      if (g === null) {
+        if (sig !== 'empty') (sig = 'empty'), (cached = EMPTY_LISTS);
+        return;
+      }
+      const ticks = rebuildTickMarks(g.priceGeom, PRICE_BASE);
+      const items: { y: number; text: string }[] = [];
+      for (const t of ticks) {
+        if (t.coord < 0 || t.coord > h) continue;
+        items.push({ y: t.coord, text: g.formatter.format(t.logical) });
+      }
+      const c = color();
+      const next = `${w}|${h}|${c}|${items.map((i) => `${i.y}:${i.text}`).join(',')}`;
+      if (next === sig) return;
+      sig = next;
+      if (items.length === 0) {
+        cached = EMPTY_LISTS;
+        return;
+      }
+      builder.reset();
+      builder.beginList('media');
+      const text = items.map((i) => {
+        const m = measurer.measure(i.text, font);
+        // right-aligned within the axis: x = w − tickLen(5) − pad(2) − textWidth; baseline
+        // centered on the tick (y + (ascent − descent)/2), the §8.5 emitter math.
+        const x = Math.max(0, w - 5 - 2 - m.width);
+        return { x, y: i.y + (m.ascent - m.descent) / 2, text: i.text, font, color: c };
+      });
+      builder.text(text);
+      cached = builder.finish();
+    },
+    displayLists: () => cached,
+  };
+}
+
+/** A thin api-side TIME-AXIS label source: one media `text` per selected time tick,
+ *  centered on the tick X, formatted via behavior.formatTick within the time-axis height. */
+function makeTimeAxisLabelSource(
+  font: FontSpec,
+  color: () => string,
+): {
+  updateWith(
+    g: FurnitureGeometry | null,
+    timeline: Timeline<ItemWithTime, unknown, unknown>,
+    behavior: IHorzScaleBehavior<unknown, unknown>,
+    model: ChartModel<unknown, unknown>,
+    measurer: ITextMeasurer,
+    frame: ViewFrame,
+  ): void;
+  displayLists(): readonly DisplayList[];
+} {
+  const builder = new DisplayListBuilder();
+  let cached: readonly DisplayList[] = EMPTY_LISTS;
+  let sig: string | null = null;
+  return {
+    updateWith(g, timeline, behavior, model, measurer, frame): void {
+      const w = frame.frame.mediaSize.width;
+      const h = frame.frame.mediaSize.height || 28;
+      if (g === null) {
+        if (sig !== 'empty') (sig = 'empty'), (cached = EMPTY_LISTS);
+        return;
+      }
+      const marks = selectTimeMarks(g, timeline, font);
+      const opts = model.options() as {
+        localization?: unknown;
+        timeScale?: { timeVisible?: boolean; secondsVisible?: boolean };
+      };
+      const loc = (opts.localization ?? { locale: 'en-US' }) as never;
+      const ts = opts.timeScale ?? {};
+      const fmt = {
+        timeVisible: ts.timeVisible ?? false,
+        secondsVisible: ts.secondsVisible ?? false,
+        tickMarkFormatter: undefined,
+      } as never;
+      const items: { x: number; text: string }[] = [];
+      for (const m of marks) {
+        // The behavior's OWN internal item for the slot (timeline.internalAt) — behavior-
+        // agnostic: the time behavior gets its {timestamp}, a number-keyed behavior its
+        // number. Skip a slot with no representative item (whitespace edge).
+        const internal = timeline.internalAt(m.index);
+        if (internal === undefined) continue;
+        const text = behavior.formatTick(internal, m.weight, loc, fmt);
+        const cx = g.horz.indexToCoordinate(m.index);
+        if (cx < 0 || cx > w) continue;
+        items.push({ x: cx, text });
+      }
+      const c = color();
+      const next = `${w}|${h}|${c}|${items.map((i) => `${Math.round(i.x)}:${i.text}`).join(',')}`;
+      if (next === sig) return;
+      sig = next;
+      if (items.length === 0) {
+        cached = EMPTY_LISTS;
+        return;
+      }
+      builder.reset();
+      builder.beginList('media');
+      // baseline near the top of the axis band, centered text (study 03 §4.14 geometry).
+      const baseline = Math.min(h - 4, font.size + 6);
+      const text = items.map((i) => {
+        const half = i.text.length === 0 ? 0 : measurer.measure(i.text, font).width / 2;
+        let x = i.x - half;
+        if (x < 0) x = 0;
+        if (x + 2 * half > w) x = Math.max(0, w - 2 * half);
+        return { x, y: baseline, text: i.text, font, color: c };
+      });
+      builder.text(text);
+      cached = builder.finish();
+    },
+    displayLists: () => cached,
+  };
+}
+
+const EMPTY_LISTS: readonly DisplayList[] = Object.freeze([]);
 
 // --- the sibling-handle factories (the §2 cached handles the chart returns) ---------
 
@@ -1139,6 +1635,9 @@ function buildHost<H>(
   element: HTMLElement,
   model: ChartModel<H>,
   sceneFor: (pane: Pane) => PaneScene,
+  rightAxisSceneFor: (pane: Pane) => PaneScene,
+  leftAxisSceneFor: (pane: Pane) => PaneScene,
+  timeAxisScene: PaneScene,
   nav: LiveNav,
   schedulerOverride?: IFrameScheduler,
   profiler?: FrameProfiler,
@@ -1161,16 +1660,21 @@ function buildHost<H>(
   };
 
   const hooks: ChartHostHooks = {
+    // The host calls these ONCE at #buildTree; each SurfaceHost captures its config.scene
+    // permanently. So the per-pane axis scenes + the time-axis scene MUST be the STABLE,
+    // memoized scenes furniture registers into (a fresh newScene() per call would throw the
+    // furniture away — the M7-source-but-never-registered bug this fixes). Only the corner
+    // stubs (which paint no furniture) use throwaway scenes.
     paneConfigs: (): readonly PaneSurfaceConfigs[] =>
       model.panes().panes().map((pane) => ({
         pane: { kind: 'pane', scene: sceneFor(pane) },
-        leftAxis: { kind: 'price-axis', scene: newScene() },
-        rightAxis: { kind: 'price-axis', scene: newScene() },
+        leftAxis: { kind: 'price-axis', scene: leftAxisSceneFor(pane) },
+        rightAxis: { kind: 'price-axis', scene: rightAxisSceneFor(pane) },
       })),
     measure: (): MeasuredAxes => ({
       axisWidths: { left: 0, right: RIGHT_AXIS_WIDTH },
       timeAxisHeight: 28,
-      timeAxis: { kind: 'time-axis', scene: newScene() },
+      timeAxis: { kind: 'time-axis', scene: timeAxisScene },
       leftStub: { kind: 'time-axis', scene: newScene() },
       rightStub: { kind: 'time-axis', scene: newScene() },
     }),
@@ -1193,9 +1697,18 @@ function buildHost<H>(
       nav.zoom(step, atX);
       model.invalidate(UpdateLevel.Render);
     },
-    resetPane: () => {
+    resetPane: (paneIndex) => {
       markInput();
       nav.reset();
+      // Double-click also returns the price axis to autoscale: re-enable it + drop the pinned
+      // range, so the next frame re-fits the visible window (study 04 §3.4 reset).
+      const pane = model.panes().panes()[paneIndex];
+      if (pane !== undefined) {
+        for (const ps of pane.priceScales()) {
+          ps.setAutoScale(true);
+          ps.setRange(null);
+        }
+      }
       model.invalidate(UpdateLevel.Render);
     },
     priceAxisDrag: (paneIndex, dy, axis) => {
