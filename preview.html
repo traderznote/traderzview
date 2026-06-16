@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>traderzview — live preview (Binance BTCUSDT)</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      margin: 0; padding: 24px; background: #fff; color: #191919;
+      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    #meta { color: #5b6b7b; margin: 0 0 16px; font-size: 13px; }
+    #chart { width: 920px; height: 520px; border: 1px solid #e0e3eb; border-radius: 8px 8px 0 0; border-bottom: none; }
+    /* the TradingView-style bottom toolbar under the time axis */
+    #toolbar {
+      width: 920px; box-sizing: border-box; display: flex; align-items: center; gap: 2px;
+      padding: 6px 10px; border: 1px solid #e0e3eb; border-radius: 0 0 8px 8px;
+      background: #fff; color: #5b6b7b; font-size: 13px; user-select: none;
+    }
+    #toolbar .range { display: flex; gap: 2px; }
+    #toolbar button {
+      border: none; background: none; color: #5b6b7b; font: inherit; font-weight: 600;
+      padding: 3px 8px; border-radius: 4px; cursor: pointer;
+    }
+    #toolbar button:hover { background: #f0f3fa; color: #131722; }
+    #toolbar button.active { color: #2962ff; }
+    #toolbar .spacer { flex: 1; }
+    #toolbar select { border: 1px solid #e0e3eb; border-radius: 4px; padding: 2px 4px; color: #131722; background: #fff; font: inherit; }
+    #toolbar .clock { font-variant-numeric: tabular-nums; color: #131722; }
+    #status { margin-top: 12px; font-size: 13px; }
+    .ok { color: #0a7d28; } .warn { color: #b26a00; } .err { color: #c1271c; white-space: pre-wrap; }
+    code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>traderzview v1.0.0 — live preview</h1>
+  <p id="meta">Candlesticks from the Binance public API (<code>BTCUSDT</code>, 1h). The first real-browser render of the library.</p>
+  <div id="chart"></div>
+  <div id="toolbar">
+    <div class="range" id="ranges"></div>
+    <span class="spacer"></span>
+    <span class="clock" id="clock">--:--:--</span>
+    <select id="tz" title="Display timezone"></select>
+  </div>
+  <div id="status">Loading…</div>
+
+  <script type="module">
+    import { createChartWith, canvasBackend, timeBehavior, CandlestickSeries } from './dist/index.mjs';
+
+    const statusEl = document.getElementById('status');
+    const set = (cls, msg) => { statusEl.className = cls; statusEl.textContent = msg; };
+    const chartEl = document.getElementById('chart');
+
+    const FALLBACK = [
+      [98000, 99500, 97200, 99100], [99100, 101200, 98800, 100800], [100800, 101000, 97500, 98200],
+      [98200, 98900, 95400, 96100], [96100, 99800, 95900, 99300], [99300, 102500, 99000, 102000],
+      [102000, 103800, 101200, 101900], [101900, 102400, 99700, 100300], [100300, 104900, 100100, 104400],
+      [104400, 105200, 102800, 103100], [103100, 103600, 100400, 101000], [101000, 106200, 100800, 105900],
+    ].map((c, i) => ({ time: 1700000000 + i * 86400, open: c[0], high: c[1], low: c[2], close: c[3] }));
+
+    async function loadBinance() {
+      const url = 'https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=300';
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Binance HTTP ' + res.status);
+      const raw = await res.json();
+      return raw.map((k) => ({ time: Math.floor(k[0] / 1000), open: +k[1], high: +k[2], low: +k[3], close: +k[4] }));
+    }
+
+    // --- toolbar config -------------------------------------------------------------
+    // 1h bars → each range maps to a bar count; "All" fits everything.
+    const RANGES = [
+      { label: '1D', bars: 24 }, { label: '5D', bars: 120 }, { label: '1M', bars: 720 }, { label: 'All', bars: null },
+    ];
+    const TZS = [
+      { label: 'UTC-8', off: -8 }, { label: 'UTC-5', off: -5 }, { label: 'UTC', off: 0 },
+      { label: 'UTC+1', off: 1 }, { label: 'UTC+2', off: 2 }, { label: 'UTC+5:30', off: 5.5 },
+      { label: 'UTC+8', off: 8 },
+    ];
+
+    let data = [], live = false, chart = null, candles = null;
+    let tzOffsetSec = 3600; // default UTC+1 (matches the screenshot)
+
+    function applyRange(r) {
+      if (chart === null) return;
+      const ts = chart.timeScale();
+      if (r.bars === null || r.bars >= data.length) { ts.fitContent(); return; }
+      const last = data.length - 1;
+      ts.setVisibleLogicalRange({ from: last - r.bars, to: last });
+    }
+
+    // (Re)build the chart with the current timezone offset, preserving the data.
+    function build() {
+      if (chart !== null) { try { chart.remove ? chart.remove() : chart.dispose(); } catch {} }
+      const behavior = tzOffsetSec === 0 ? timeBehavior() : timeBehavior({ timezoneOffset: () => tzOffsetSec });
+      chart = createChartWith(chartEl, canvasBackend(), behavior, {
+        width: 920, height: 520,
+        layout: { textColor: '#191919', background: { color: '#ffffff' } },
+        timeScale: { timeVisible: true },
+      });
+      candles = chart.addSeries(CandlestickSeries, {
+        upColor: '#26a69a', downColor: '#ef5350',
+        borderUpColor: '#26a69a', borderDownColor: '#ef5350',
+        wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+      });
+      candles.setData(data);
+      chart.timeScale().fitContent();
+      window.__tv = { chart, candles, count: data.length, live };
+    }
+
+    function buildToolbar() {
+      const ranges = document.getElementById('ranges');
+      ranges.innerHTML = '';
+      for (const r of RANGES) {
+        const b = document.createElement('button');
+        b.textContent = r.label;
+        b.onclick = () => { applyRange(r); [...ranges.children].forEach((c) => c.classList.remove('active')); b.classList.add('active'); };
+        ranges.appendChild(b);
+      }
+      const tz = document.getElementById('tz');
+      tz.innerHTML = '';
+      for (const z of TZS) {
+        const o = document.createElement('option');
+        o.value = String(z.off); o.textContent = z.label;
+        if (z.off * 3600 === tzOffsetSec) o.selected = true;
+        tz.appendChild(o);
+      }
+      tz.onchange = () => { tzOffsetSec = Math.round(parseFloat(tz.value) * 3600); build(); };
+    }
+
+    // A live clock in the selected timezone (wall-clock = UTC now + offset).
+    function tickClock() {
+      const now = new Date();
+      const utcMs = now.getTime() + now.getTimezoneOffset() * 60000;
+      const t = new Date(utcMs + tzOffsetSec * 1000);
+      const hh = String(t.getHours()).padStart(2, '0');
+      const mm = String(t.getMinutes()).padStart(2, '0');
+      const ss = String(t.getSeconds()).padStart(2, '0');
+      const z = TZS.find((x) => Math.round(x.off * 3600) === tzOffsetSec);
+      document.getElementById('clock').textContent = `${hh}:${mm}:${ss}  ${z ? z.label : 'UTC'}`;
+    }
+
+    (async () => {
+      try { data = await loadBinance(); live = true; }
+      catch (e) { data = FALLBACK; set('warn', 'Binance fetch failed (' + e.message + ') — embedded fallback candles.'); }
+      try {
+        buildToolbar();
+        build();
+        tickClock(); setInterval(tickClock, 1000);
+        if (live) set('ok', '✓ Rendered ' + data.length + ' live Binance BTCUSDT 1h candles. Last close: ' + data[data.length - 1].close);
+      } catch (e) {
+        set('err', 'traderzview render error:\n' + (e && e.stack ? e.stack : e));
+        window.__tv = { error: String(e && e.stack || e) };
+      }
+    })();
+  </script>
+</body>
+</html>

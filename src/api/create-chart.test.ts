@@ -459,6 +459,21 @@ describe('createLiveNav — pan/zoom/reset drive the live geometry (model-naviga
     expect(nav.rightOffset()).toBeCloseTo(0, 6); // R = 0
   });
 
+  test('setVisibleRange pins the right edge to `to` and shows ~the requested span (range presets)', () => {
+    const n = 300;
+    const width = 860;
+    const nav = makeNav(n, width);
+    nav.fit();
+    const fullSpan = (() => { const v = geomOf(nav, n, width).visibleLogicalRange()!; return (v.to as number) - (v.from as number); })();
+    nav.setVisibleRange(n - 24, n - 1); // a "1D" preset over 1h bars: the last ~24 bars
+    const v = geomOf(nav, n, width).visibleLogicalRange()!;
+    expect(v.to as number).toBeCloseTo(n - 1, 0); // right edge pinned to `to`
+    const span = (v.to as number) - (v.from as number);
+    expect(span).toBeGreaterThan(20); // ~24 bars (±1 from the geometry's inclusive edges)
+    expect(span).toBeLessThan(28);
+    expect(span).toBeLessThan(fullSpan); // genuinely narrower than the full view
+  });
+
   test('reset restores the option-default spacing/offset then re-fits (double-click §10)', () => {
     const n = 18;
     const width = 540;

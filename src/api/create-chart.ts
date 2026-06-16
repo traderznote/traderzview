@@ -104,6 +104,9 @@ interface LiveNav {
   fit(): void;
   /** Reset to the option defaults (barSpacing/rightOffset), then fit (double-click §10). */
   reset(): void;
+  /** Set the visible logical window to [from, to]: S = W/span, R = to − (N−1), both clamped
+   *  (the inverse of HorzGeometry.visibleLogicalRange — drives setVisibleLogicalRange). */
+  setVisibleRange(from: number, to: number): void;
 }
 
 /** One fully wired series: model Series ↔ PlotStore ↔ shared Timeline ↔ SeriesKind
@@ -1475,7 +1478,13 @@ function makeTimeScaleHandle<H>(
       setVisibleRange: () => {},
       getVisibleLogicalRange: () =>
         timeline.slotCount === 0 ? null : (geom().visibleLogicalRange() as LogicalRange | null),
-      setVisibleLogicalRange: () => {}, // no-op pending the model navigator (FIX 6 note)
+      setVisibleLogicalRange: (range) => {
+        // Drive the live nav to show [from, to] (range presets / programmatic zoom). Was a
+        // no-op pending the model navigator; the LiveNav now owns the inverse geometry.
+        if (range === null) return;
+        nav.setVisibleRange(range.from as unknown as number, range.to as unknown as number);
+        model.invalidate(UpdateLevel.Render);
+      },
       logicalToCoordinate: (logical) =>
         timeline.slotCount === 0 ? null : (geom().indexToCoordinate(logical) as unknown as Coordinate),
       coordinateToLogical: (x) => (timeline.slotCount === 0 ? null : geom().coordinateToLogical(x)),
@@ -1631,6 +1640,14 @@ export function createLiveNav<H>(
         barSpacing = clampBarSpacing(fit.barSpacing, spacingClamp());
         rightOffset = clampRightOffset(fit.rightOffset, offsetClamp());
       }
+    },
+    setVisibleRange: (from, to) => {
+      const W = paneWidth() || 100;
+      const n = barCount();
+      const span = Math.max(1, to - from); // bars across the pane width
+      barSpacing = clampBarSpacing(W / span, spacingClamp());
+      // R = to − baseIndex pins the requested right edge (baseIndex = N−1); clamp to bounds.
+      rightOffset = clampRightOffset(to - Math.max(0, n - 1), offsetClamp());
     },
   };
 }
