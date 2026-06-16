@@ -82,6 +82,9 @@ export interface DomInputConfig {
   readonly wheelSpeed?: number;
   readonly windowsChromium?: boolean;
   readonly getDpr?: () => number;
+  /** Called when the pointer leaves the surface (pointerleave) — the host clears the
+   *  crosshair so it does not stay stuck at the last in-surface position (study 07 §5). */
+  readonly onLeave?: () => void;
 }
 
 /**
@@ -149,6 +152,12 @@ export function attachDomInput(
       /* as above */
     }
   };
+  // The pointer left the surface → tell the host to clear the crosshair (it lingers at the
+  // last position otherwise). Capture during a drag keeps moves flowing, so this fires on a
+  // genuine hover-exit; clearHover is idempotent so a stray fire mid-drag is harmless.
+  const onLeave = (): void => {
+    config.onLeave?.();
+  };
   const onWheel = (e: WheelEventLike): void => {
     // preventDefault so the page does not scroll / pinch-zoom under the chart (§7).
     e.preventDefault();
@@ -169,6 +178,7 @@ export function attachDomInput(
   target.addEventListener('pointermove', onPointerMove as (e: never) => void);
   target.addEventListener('pointerup', onPointerUp as (e: never) => void);
   target.addEventListener('pointercancel', onPointerCancel as (e: never) => void);
+  target.addEventListener('pointerleave', onLeave as (e: never) => void);
   target.addEventListener('wheel', onWheel as (e: never) => void, wheelOpts);
 
   return () => {
@@ -176,6 +186,7 @@ export function attachDomInput(
     target.removeEventListener('pointermove', onPointerMove as (e: never) => void);
     target.removeEventListener('pointerup', onPointerUp as (e: never) => void);
     target.removeEventListener('pointercancel', onPointerCancel as (e: never) => void);
+    target.removeEventListener('pointerleave', onLeave as (e: never) => void);
     target.removeEventListener('wheel', onWheel as (e: never) => void, wheelOpts);
   };
 }

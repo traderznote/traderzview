@@ -335,10 +335,10 @@ export class ChartHost implements FrameDriver {
   #mkSurface(mount: HostElement, config: SurfaceConfig, paneIndex: number): SurfaceHost {
     this.#root.appendChild(mount);
     // §7: a per-surface cursor hint — the price axis scales (ns-resize), the time axis zooms
-    // (ew-resize); the pane HIDES the system cursor ('none') so the drawn crosshair lines are
-    // the only pointer indicator (no redundant OS '+'). `style` is a plain record on a fake.
+    // (ew-resize); the pane uses a thin ash-grey '+' (PANE_CURSOR) that blends on light/dark.
+    // `style` is a plain record on a headless fake.
     mount.style.cursor =
-      config.kind === 'price-axis' ? 'ns-resize' : config.kind === 'time-axis' ? 'ew-resize' : 'none';
+      config.kind === 'price-axis' ? 'ns-resize' : config.kind === 'time-axis' ? 'ew-resize' : PANE_CURSOR;
     const sh = new SurfaceHost(
       mount,
       this.#deps.backend,
@@ -373,6 +373,10 @@ export class ChartHost implements FrameDriver {
             wheelSpeed: this.#deps.wheelSpeed,
             windowsChromium: this.#deps.windowsChromium,
             getDpr: this.#deps.getDpr,
+            // Pointer left this surface → clear the crosshair (it lingers otherwise, §5.5).
+            onLeave: () => {
+              if (this.#deps.hooks.clearHover()) this.#loop.invalidate(createMask({ level: UpdateLevel.Overlay }));
+            },
           },
         ),
       );
@@ -456,3 +460,9 @@ export class ChartHost implements FrameDriver {
 }
 
 const ZERO: Rect = { x: 0, y: 0, width: 0, height: 0 };
+
+// A thin ash-grey '+' crosshair cursor (SVG data-URI, hotspot at its 12,12 center). Ash grey
+// (#8a8a8a) reads on both light and dark backgrounds and is finer than the OS crosshair;
+// falls back to the native 'crosshair' if the data-URI is unsupported.
+const PANE_CURSOR =
+  "url(\"data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='24'%20height='24'%3E%3Cpath%20d='M12%200V24M0%2012H24'%20stroke='%238a8a8a'%20stroke-width='1'/%3E%3C/svg%3E\") 12 12, crosshair";

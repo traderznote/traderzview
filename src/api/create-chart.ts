@@ -1303,8 +1303,13 @@ function makeTimeAxisLabelSource(
       };
       const loc = (opts.localization ?? { locale: 'en-US' }) as never;
       const ts = opts.timeScale ?? {};
+      // Default timeVisible TRUE so the axis shows HH:mm when zoomed into intraday data (the
+      // weight engine still renders the day/month at day/month boundaries, so daily data shows
+      // dates). NOTE the effective default lives HERE: model.options().timeScale is currently
+      // undefined (DEFAULT_CHART_OPTIONS carries no timeScale sub-object), so this `??` IS the
+      // default until that seam is wired; an explicit user timeVisible:false is still honored.
       const fmt = {
-        timeVisible: ts.timeVisible ?? false,
+        timeVisible: ts.timeVisible ?? true,
         secondsVisible: ts.secondsVisible ?? false,
         tickMarkFormatter: undefined,
       } as never;

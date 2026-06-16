@@ -51,15 +51,24 @@ const pointer = (over: Partial<GesturePointer & { pointerType: string }> = {}) =
 });
 
 describe('attachDomInput — DOM Pointer-Events → GestureMachine (architecture §7)', () => {
-  test('attaches the five listeners and the unsubscribe removes them', () => {
+  test('attaches the six listeners and the unsubscribe removes them', () => {
     const { target, listeners } = fakeTarget();
     const { machine } = paneMachine();
     const off = attachDomInput(target, machine, () => {}, () => ({ left: 0, top: 0 }));
     expect([...listeners.keys()].sort()).toEqual(
-      ['pointercancel', 'pointerdown', 'pointermove', 'pointerup', 'wheel'].sort(),
+      ['pointercancel', 'pointerdown', 'pointerleave', 'pointermove', 'pointerup', 'wheel'].sort(),
     );
     off();
     expect(listeners.size).toBe(0);
+  });
+
+  test('pointerleave fires the onLeave callback (host clears the crosshair, §5.5)', () => {
+    const { target, dispatch } = fakeTarget();
+    const { machine } = paneMachine();
+    let left = 0;
+    attachDomInput(target, machine, () => {}, () => ({ left: 0, top: 0 }), { onLeave: () => left++ });
+    dispatch('pointerleave', {});
+    expect(left).toBe(1);
   });
 
   test('pointerdown captures the pointer; pointerup/cancel release it', () => {
