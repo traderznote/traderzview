@@ -72,8 +72,8 @@ export interface LayoutOptions {
 
 /** Grid options (design 02 §6.3). */
 export interface GridOptions {
-  vertLines: { color: string; visible: boolean };
-  horzLines: { color: string; visible: boolean };
+  vertLines: { color: string; visible: boolean; lineWidth?: number };
+  horzLines: { color: string; visible: boolean; lineWidth?: number };
 }
 
 /** Crosshair options the model owns the mode of (design 02 §6.4). */
@@ -115,8 +115,10 @@ export const DEFAULT_CHART_OPTIONS: ChartOptions = {
     fontFamily: DEFAULT_FONT_FAMILY,
   },
   grid: {
-    vertLines: { color: '#D6DCDE', visible: true },
-    horzLines: { color: '#D6DCDE', visible: true },
+    // A soft, low-opacity grid (default was opaque #D6DCDE which read too hard); thin
+    // lineWidth crisps to a hairline (1 device px) on hi-DPI instead of 2.
+    vertLines: { color: 'rgba(214, 220, 222, 0.5)', visible: true, lineWidth: 0.5 },
+    horzLines: { color: 'rgba(214, 220, 222, 0.5)', visible: true, lineWidth: 0.5 },
   },
   crosshair: { mode: 'magnet' },
 };

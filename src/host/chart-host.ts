@@ -335,9 +335,10 @@ export class ChartHost implements FrameDriver {
   #mkSurface(mount: HostElement, config: SurfaceConfig, paneIndex: number): SurfaceHost {
     this.#root.appendChild(mount);
     // §7: a per-surface cursor hint — the price axis scales (ns-resize), the time axis zooms
-    // (ew-resize), the pane shows the crosshair. `style` is a plain record on a headless fake.
+    // (ew-resize); the pane HIDES the system cursor ('none') so the drawn crosshair lines are
+    // the only pointer indicator (no redundant OS '+'). `style` is a plain record on a fake.
     mount.style.cursor =
-      config.kind === 'price-axis' ? 'ns-resize' : config.kind === 'time-axis' ? 'ew-resize' : 'crosshair';
+      config.kind === 'price-axis' ? 'ns-resize' : config.kind === 'time-axis' ? 'ew-resize' : 'none';
     const sh = new SurfaceHost(
       mount,
       this.#deps.backend,

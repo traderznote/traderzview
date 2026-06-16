@@ -9,7 +9,7 @@
 import type { Coordinate, DeepPartial, HorzKey, IFrameCounters, Logical, TimeIndex } from '../core';
 import { createFrameCounters } from '../core';
 import type { DisplayList, FontSpec, IRenderBackend, ITextMeasurer, SceneSource, ViewFrame } from '../gfx';
-import { DisplayListBuilder, ZBand } from '../gfx';
+import { DisplayListBuilder, LineStyle, ZBand } from '../gfx';
 import { PlotStore, Timeline, timeBehavior } from '../data';
 import type { IHorzScaleBehavior, PlotStoreView, Time } from '../data';
 import {
@@ -314,10 +314,15 @@ export function createChartWith<H = Time>(
     };
     sceneFor(pane).register(gridFeed, { ownerZ: -1, ownerId: -1 });
 
-    // CROSSHAIR (band Crosshair, overlay) → the pane scene: the vertical + horizontal dashed
-    // lines that track the pointer, read from the shared crosshair model (host applyHover drives
-    // it). Repaints on the cheap Overlay frame the host arms when the hover position changes.
-    sceneFor(pane).register(createCrosshairSource(crosshair), { ownerZ: -1, ownerId: -1 });
+    // CROSSHAIR (band Crosshair, overlay) → the pane scene: the vertical + horizontal lines
+    // that track the pointer, read from the shared crosshair model (host applyHover drives it).
+    // Thin (0.7 px) dotted lines so they read as a fine guide, not a heavy dashed cross.
+    // Repaints on the cheap Overlay frame the host arms when the hover position changes.
+    const crosshairLine = { width: 0.7, style: LineStyle.Dotted };
+    sceneFor(pane).register(
+      createCrosshairSource(crosshair, { vertLine: crosshairLine, horzLine: crosshairLine }),
+      { ownerZ: -1, ownerId: -1 },
+    );
 
     // 2) PRICE AXIS (right) → the right-axis scene (band Labels): the price TICK LABELS,
     //    right-aligned inside RIGHT_AXIS_WIDTH (api-side emit via DisplayListBuilder), + the
@@ -839,7 +844,7 @@ function wireSeries<H>(
       const y = lv !== null && lastPrice !== null ? lastPrice.priceToCoordinate(lv.price) : null;
       return { y: y !== null && Number.isFinite(y) ? y : null, barColor: modelSeries.priceLineColor(), text: '' };
     },
-    { lineWidth: 1 },
+    { lineWidth: 0.7 }, // a thin hairline (was 1 → 2 device px on hi-DPI, which read too thick)
   );
   scene.register(lastValueLineSource, { ownerZ, ownerId });
   const paneSeries = { kind: () => modelSeries.kind() }; // the model PaneSeries (removeSeries drops it)
