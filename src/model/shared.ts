@@ -115,10 +115,11 @@ export const DEFAULT_CHART_OPTIONS: ChartOptions = {
     fontFamily: DEFAULT_FONT_FAMILY,
   },
   grid: {
-    // A soft, low-opacity grid (default was opaque #D6DCDE which read too hard); thin
-    // lineWidth crisps to a hairline (1 device px) on hi-DPI instead of 2.
-    vertLines: { color: 'rgba(214, 220, 222, 0.5)', visible: true, lineWidth: 0.5 },
-    horzLines: { color: 'rgba(214, 220, 222, 0.5)', visible: true, lineWidth: 0.5 },
+    // A faint, low-opacity grid (default was opaque #D6DCDE which read too hard). A crisp line
+    // can't render below 1 device px, so opacity is the lever for "softer": ~0.22 alpha reads as
+    // a barely-there hairline. lineWidth 0.5 keeps it 1 px on hi-DPI (would be 2 px otherwise).
+    vertLines: { color: 'rgba(214, 220, 222, 0.25)', visible: true, lineWidth: 0.5 },
+    horzLines: { color: 'rgba(214, 220, 222, 0.25)', visible: true, lineWidth: 0.5 },
   },
   crosshair: { mode: 'magnet' },
 };

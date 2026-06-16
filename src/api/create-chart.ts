@@ -9,7 +9,7 @@
 import type { Coordinate, DeepPartial, HorzKey, IFrameCounters, Logical, TimeIndex } from '../core';
 import { createFrameCounters } from '../core';
 import type { DisplayList, FontSpec, IRenderBackend, ITextMeasurer, SceneSource, ViewFrame } from '../gfx';
-import { DisplayListBuilder, LineStyle, ZBand } from '../gfx';
+import { DisplayListBuilder, ZBand } from '../gfx';
 import { PlotStore, Timeline, timeBehavior } from '../data';
 import type { IHorzScaleBehavior, PlotStoreView, Time } from '../data';
 import {
@@ -314,15 +314,10 @@ export function createChartWith<H = Time>(
     };
     sceneFor(pane).register(gridFeed, { ownerZ: -1, ownerId: -1 });
 
-    // CROSSHAIR (band Crosshair, overlay) → the pane scene: the vertical + horizontal lines
-    // that track the pointer, read from the shared crosshair model (host applyHover drives it).
-    // Thin (0.7 px) dotted lines so they read as a fine guide, not a heavy dashed cross.
-    // Repaints on the cheap Overlay frame the host arms when the hover position changes.
-    const crosshairLine = { width: 0.7, style: LineStyle.Dotted };
-    sceneFor(pane).register(
-      createCrosshairSource(crosshair, { vertLine: crosshairLine, horzLine: crosshairLine }),
-      { ownerZ: -1, ownerId: -1 },
-    );
+    // CROSSHAIR (band Crosshair, overlay) → the pane scene: the vertical + horizontal dashed
+    // lines that track the pointer, read from the shared crosshair model (host applyHover drives
+    // it). Default style (1 px LargeDashed). Repaints on the cheap Overlay frame the host arms.
+    sceneFor(pane).register(createCrosshairSource(crosshair), { ownerZ: -1, ownerId: -1 });
 
     // 2) PRICE AXIS (right) → the right-axis scene (band Labels): the price TICK LABELS,
     //    right-aligned inside RIGHT_AXIS_WIDTH (api-side emit via DisplayListBuilder), + the
